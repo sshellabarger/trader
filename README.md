@@ -118,6 +118,15 @@ pip install -e .
 
 ```bash
 # ensure env is set before running (see Section 3)
+# export everything in .env into the current shell
+set -a          # turn on "allexport"
+source .env
+set +a          # turn off "allexport"
+
+# verify
+env | grep -E 'ALPACA_|NEWSAPI|FINNHUB|DAYTRADER_UNIVERSE|TRADING_BOT_DB'
+
+# run the application
 python -m trading_bot.cli
 ```
 
