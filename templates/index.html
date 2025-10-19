@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Trading Bot</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-hover: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --border: #334155;
+            --accent: #3b82f6;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --info: #06b6d4;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: var(--bg-card);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .header-title h1 {
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+
+        .market-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .market-status.open {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+        }
+
+        .market-status.closed {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .account-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .stat-change {
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        .stat-change.positive { color: var(--success); }
+        .stat-change.negative { color: var(--danger); }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 10px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 600;
+            border-radius: 8px 8px 0 0;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tr:hover {
+            background: var(--bg-hover);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-success { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+        .badge-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+        .badge-warning { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+        .badge-info { background: rgba(6, 182, 212, 0.15); color: var(--info); }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .setting-group {
+            background: rgba(255, 255, 255, 0.02);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .setting-group h3 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: var(--accent);
+        }
+
+        .setting-item {
+            margin-bottom: 15px;
+        }
+
+        .setting-item label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 5px;
+        }
+
+        .setting-item small {
+            display: block;
+            margin-top: 4px;
+            font-size: 11px;
+        }
+
+        .setting-item input,
+        .setting-item select {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .setting-item input:focus,
+        .setting-item select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toggle input[type="checkbox"] {
+            width: 50px;
+            height: 26px;
+            appearance: none;
+            background: var(--border);
+            border-radius: 13px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .toggle input[type="checkbox"]:checked {
+            background: var(--success);
+        }
+
+        .toggle input[type="checkbox"]::before {
+            content: '';
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: white;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s;
+        }
+
+        .toggle input[type="checkbox"]:checked::before {
+            transform: translateX(24px);
+        }
+
+        .log-entry {
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .log-entry.info { border-left-color: var(--info); }
+        .log-entry.warning { border-left-color: var(--warning); }
+        .log-entry.error { border-left-color: var(--danger); }
+        .log-entry.success { border-left-color: var(--success); }
+
+        .log-time {
+            color: var(--text-secondary);
+            margin-right: 10px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 15px;
+            opacity: 0.3;
+        }
+
+        .refresh-timer {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+
+            .header-content {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+
+        .score-bar {
+            width: 100px;
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .score-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--danger), var(--warning), var(--success));
+            transition: width 0.3s;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: var(--accent);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="header-content">
+                <div class="header-title">
+                    <h1>🤖 Enhanced Trading Bot</h1>
+                    <div class="market-status" id="marketStatus">
+                        <span class="status-dot"></span>
+                        <span id="marketStatusText">Checking...</span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <span class="refresh-timer" id="refreshTimer">Auto-refresh: 20s</span>
+                    <button class="btn btn-primary" onclick="refreshAll()">
+                        <span id="refreshBtn">🔄 Refresh Now</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Account Summary -->
+        <div class="account-summary" id="accountSummary">
+            <div class="stat-card">
+                <div class="stat-label">Account Equity</div>
+                <div class="stat-value" id="equity">$0.00</div>
+                <div class="stat-change" id="equityChange">+0.00%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Buying Power</div>
+                <div class="stat-value" id="buyingPower">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Open Positions</div>
+                <div class="stat-value" id="positionCount">0</div>
+                <div class="stat-change" id="exposurePct">0% exposure</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Daily P/L</div>
+                <div class="stat-value" id="dailyPL">$0.00</div>
+                <div class="stat-change" id="dailyPLPct">0.00%</div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('positions')">📊 Positions</button>
+            <button class="tab" onclick="switchTab('candidates')">🎯 Candidates</button>
+            <button class="tab" onclick="switchTab('settings')">⚙️ Settings</button>
+            <button class="tab" onclick="switchTab('logs')">📝 Logs & Status</button>
+        </div>
+
+        <!-- Positions Tab -->
+        <div class="tab-content active" id="positions-tab">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Current Positions</h2>
+                    <button class="btn btn-sm btn-danger" onclick="closeAllPositions()">Close All</button>
+                </div>
+                <div id="positionsTable"></div>
+            </div>
+        </div>
+
+        <!-- Candidates Tab -->
+        <div class="tab-content" id="candidates-tab">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Top Candidates</h2>
+                    <span class="badge badge-info" id="candidateCount">0 candidates</span>
+                </div>
+                <div id="candidatesTable"></div>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div class="tab-content" id="settings-tab">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Bot Settings</h2>
+                    <button class="btn btn-success" onclick="saveSettings()">💾 Save Settings</button>
+                </div>
+                <div class="settings-grid" id="settingsGrid"></div>
+            </div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div class="tab-content" id="logs-tab">
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">System Health</h2>
+                    </div>
+                    <div id="healthStatus"></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Recent Events</h2>
+                    </div>
+                    <div id="eventsLog"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let refreshInterval;
+        let countdown = 20;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshAll();
+            startAutoRefresh();
+        });
+
+        function startAutoRefresh() {
+            refreshInterval = setInterval(() => {
+                countdown--;
+                document.getElementById('refreshTimer').textContent = `Auto-refresh: ${countdown}s`;
+
+                if (countdown <= 0) {
+                    refreshAll();
+                    countdown = 20;
+                }
+            }, 1000);
+        }
+
+        async function refreshAll() {
+            document.getElementById('refreshBtn').innerHTML = '<span class="loading"></span>';
+
+            try {
+                await Promise.all([
+                    loadAccount(),
+                    loadPositions(),
+                    loadCandidates(),
+                    loadSettings(),
+                    loadHealth(),
+                    loadEvents()
+                ]);
+            } catch (error) {
+                console.error('Refresh error:', error);
+            }
+
+            document.getElementById('refreshBtn').textContent = '🔄 Refresh Now';
+            countdown = 20;
+        }
+
+        async function loadAccount() {
+            try {
+                const health = await fetch('/api/health').then(r => r.json());
+
+                // Parse health data if it's double-encoded JSON
+                let parsedHealth = health;
+                if (health.system && typeof health.system === 'string') {
+                    try {
+                        parsedHealth = { system: JSON.parse(health.system) };
+                    } catch (e) {
+                        // Keep original
+                    }
+                }
+
+                // Extract account and clock from nested structure
+                let account = {};
+                let clock = {};
+
+                if (parsedHealth.system?.status) {
+                    try {
+                        const systemData = typeof parsedHealth.system.status === 'string'
+                            ? JSON.parse(parsedHealth.system.status)
+                            : parsedHealth.system;
+                        account = systemData.account || {};
+                        clock = systemData.clock || {};
+                    } catch (e) {
+                        account = parsedHealth.account || health.account || {};
+                        clock = parsedHealth.clock || health.clock || {};
+                    }
+                } else {
+                    account = parsedHealth.account || health.account || {};
+                    clock = parsedHealth.clock || health.clock || {};
+                }
+
+                // Update account display
+                const equity = account.equity || 0;
+                document.getElementById('equity').textContent = formatCurrency(equity);
+                document.getElementById('buyingPower').textContent = formatCurrency(account.buying_power || 0);
+
+                // Market status
+                const marketStatus = document.getElementById('marketStatus');
+                const isOpen = clock.is_open || false;
+                marketStatus.className = `market-status ${isOpen ? 'open' : 'closed'}`;
+                document.getElementById('marketStatusText').textContent = isOpen ? 'Market Open' : 'Market Closed';
+            } catch (error) {
+                console.error('Load account error:', error);
+            }
+        }
+
+        async function loadPositions() {
+            try {
+                const data = await fetch('/api/positions').then(r => r.json());
+                let positions = data.positions || [];
+
+                // Parse if it's a JSON string
+                if (typeof positions === 'string') {
+                    try {
+                        positions = JSON.parse(positions);
+                    } catch (e) {
+                        positions = [];
+                    }
+                }
+
+                // Ensure it's an array
+                if (!Array.isArray(positions)) {
+                    positions = [];
+                }
+
+                document.getElementById('positionCount').textContent = positions.length;
+
+                if (positions.length === 0) {
+                    document.getElementById('positionsTable').innerHTML = `
+                        <div class="empty-state">
+                            <div style="font-size: 48px;">📊</div>
+                            <div>No open positions</div>
+                            <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
+                                ${document.getElementById('marketStatusText').textContent === 'Market Closed'
+                                    ? 'Market is currently closed'
+                                    : 'Waiting for entry signals...'}
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('exposurePct').textContent = '0% exposure';
+                    document.getElementById('dailyPL').textContent = '$0.00';
+                    document.getElementById('dailyPLPct').textContent = '0.00%';
+                    return;
+                }
+
+                let totalValue = 0;
+                let totalPL = 0;
+
+                const rows = positions.map(pos => {
+                    totalValue += parseFloat(pos.market_value || 0);
+                    totalPL += parseFloat(pos.unrealized_pl || 0);
+                    const plClass = pos.unrealized_pl >= 0 ? 'positive' : 'negative';
+
+                    return `
+                        <tr>
+                            <td><strong>${pos.symbol}</strong></td>
+                            <td>${pos.qty}</td>
+                            <td>${formatCurrency(pos.avg_entry_price)}</td>
+                            <td>${formatCurrency(pos.current_price)}</td>
+                            <td>${formatCurrency(pos.market_value)}</td>
+                            <td class="stat-change ${plClass}">
+                                ${formatCurrency(pos.unrealized_pl)} (${pos.unrealized_plpc?.toFixed(2)}%)
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-danger" onclick="closePosition('${pos.symbol}')">
+                                    Close
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                document.getElementById('positionsTable').innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Quantity</th>
+                                <th>Avg Entry</th>
+                                <th>Current</th>
+                                <th>Market Value</th>
+                                <th>Unrealized P/L</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                `;
+
+                // Update exposure
+                const equity = parseFloat(document.getElementById('equity').textContent.replace(/[$,]/g, ''));
+                const exposurePct = equity > 0 ? (totalValue / equity * 100).toFixed(1) : 0;
+                document.getElementById('exposurePct').textContent = `${exposurePct}% exposure`;
+
+                // Update daily P/L
+                document.getElementById('dailyPL').textContent = formatCurrency(totalPL);
+                const plClass = totalPL >= 0 ? 'positive' : 'negative';
+                document.getElementById('dailyPL').className = `stat-value ${plClass}`;
+                const plPct = equity > 0 ? (totalPL / equity * 100).toFixed(2) : '0.00';
+                document.getElementById('dailyPLPct').textContent = `${plPct}%`;
+                document.getElementById('dailyPLPct').className = `stat-change ${plClass}`;
+
+            } catch (error) {
+                console.error('Load positions error:', error);
+            }
+        }
+
+        async function loadCandidates() {
+            try {
+                const data = await fetch('/api/candidates').then(r => r.json());
+                let candidates = data.candidates || [];
+
+                // Handle different data formats
+                if (!Array.isArray(candidates)) {
+                    candidates = [];
+                }
+
+                document.getElementById('candidateCount').textContent = `${candidates.length} candidates`;
+
+                if (candidates.length === 0) {
+                    document.getElementById('candidatesTable').innerHTML = `
+                        <div class="empty-state">
+                            <div style="font-size: 48px;">🎯</div>
+                            <div>No candidates meet entry criteria</div>
+                            <div style="margin-top: 10px; font-size: 13px;">
+                                Try lowering the entry threshold in Settings
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                const rows = candidates.slice(0, 20).map(candidate => {
+                    const score = candidate.final_score || candidate.score || 0;
+                    const symbol = candidate.symbol || candidate.Symbol || 'N/A';
+                    const price = candidate.metadata?.current_price || candidate.price || 0;
+                    const regime = candidate.regime?.value || candidate.regime || 'unknown';
+                    const strategies = candidate.active_strategies || [];
+
+                    return `
+                        <tr>
+                            <td><strong>${symbol}</strong></td>
+                            <td>${formatCurrency(price)}</td>
+                            <td>
+                                <div class="score-bar">
+                                    <div class="score-fill" style="width: ${score * 100}%"></div>
+                                </div>
+                                <div style="font-size: 12px; margin-top: 4px;">${score.toFixed(3)}</div>
+                            </td>
+                            <td><span class="badge badge-info">${regime}</span></td>
+                            <td style="font-size: 12px;">
+                                ${strategies.slice(0, 3).map(s => `<span class="badge badge-success">${s}</span>`).join(' ')}
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                document.getElementById('candidatesTable').innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Price</th>
+                                <th>Score</th>
+                                <th>Regime</th>
+                                <th>Active Strategies</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                `;
+            } catch (error) {
+                console.error('Load candidates error:', error);
+            }
+        }
+
+        async function loadSettings() {
+            try {
+                const settings = await fetch('/api/settings').then(r => r.json());
+
+                console.log('Loaded settings:', settings); // Debug output
+
+                const settingsHTML = `
+                    <div class="setting-group">
+                        <h3>🎯 Entry & Exit Thresholds</h3>
+                        <div class="setting-item">
+                            <label>Entry Threshold</label>
+                            <input type="number" id="setting-enter" value="${settings.thresholds?.enter || 0.62}" step="0.01" min="0" max="1">
+                            <small style="color: var(--text-secondary);">Minimum score to enter a trade (0-1)</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Take Profit %</label>
+                            <input type="number" id="setting-take-profit" value="${settings.thresholds?.take_profit_pct || 2}" step="0.1">
+                            <small style="color: var(--text-secondary);">Exit when position gains this much</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Stop Loss (bps)</label>
+                            <input type="number" id="setting-stop-loss" value="${settings.thresholds?.trade_stop_loss_bps || 50}" step="1">
+                            <small style="color: var(--text-secondary);">50 bps = 0.5% stop loss</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Daily Stop Loss %</label>
+                            <input type="number" id="setting-daily-stop" value="${settings.thresholds?.daily_stop_loss_pct || 2}" step="0.1">
+                            <small style="color: var(--text-secondary);">Close all if account loses this much in one day</small>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>⚖️ Risk Management</h3>
+                        <div class="setting-item">
+                            <label>Max Position Size %</label>
+                            <input type="number" id="setting-max-position" value="${settings.risk?.max_position_size_pct || 5}" step="0.5">
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Total Exposure %</label>
+                            <input type="number" id="setting-max-exposure" value="${settings.risk?.max_total_exposure_pct || 80}" step="5">
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Positions</label>
+                            <input type="number" id="setting-max-positions" value="${settings.risk?.max_positions || 10}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Risk Per Trade %</label>
+                            <input type="number" id="setting-risk-per-trade" value="${settings.risk?.risk_per_trade_pct || 1}" step="0.1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Trailing Stop %</label>
+                            <input type="number" id="setting-trailing-stop" value="${settings.risk?.trailing_stop_pct || 1.5}" step="0.1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Hold Time (minutes)</label>
+                            <input type="number" id="setting-max-hold-time" value="${settings.risk?.max_hold_time_minutes || 240}" step="30">
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-trailing-enabled" ${settings.risk?.trailing_stop_enabled ? 'checked' : ''}>
+                                <span>Enable Trailing Stops</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-close-eod" ${settings.risk?.close_all_eod ? 'checked' : ''}>
+                                <span>Close All at EOD</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>📈 Strategies</h3>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-momentum" ${settings.strategies?.momentum ? 'checked' : ''}>
+                                <span>Momentum</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-mean-reversion" ${settings.strategies?.mean_reversion ? 'checked' : ''}>
+                                <span>Mean Reversion</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-news" ${settings.strategies?.news ? 'checked' : ''}>
+                                <span>News</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-earnings" ${settings.strategies?.earnings ? 'checked' : ''}>
+                                <span>Earnings</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-crypto" ${settings.strategies?.crypto ? 'checked' : ''}>
+                                <span>🪙 Crypto (24/7 Trading)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>🪙 Crypto Settings</h3>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-crypto-enabled" ${settings.crypto?.enabled ? 'checked' : ''}>
+                                <span>Enable Crypto Trading</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label>Crypto Pairs (comma-separated)</label>
+                            <input type="text" id="setting-crypto-universe"
+                                   value="${(settings.crypto?.universe || ['BTC/USD', 'ETH/USD']).join(', ')}"
+                                   placeholder="BTC/USD, ETH/USD, SOL/USD">
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>⏱️ Scheduling</h3>
+                        <div class="setting-item">
+                            <label>Candidate Refresh (min)</label>
+                            <input type="number" id="setting-candidate-refresh" value="${settings.scheduling?.candidate_refresh_min || 20}" step="5">
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Symbols to Track</label>
+                            <input type="number" id="setting-max-symbols" value="${settings.scheduling?.candidate_max_symbols || 150}" step="10">
+                        </div>
+                        <div class="setting-item">
+                            <label>News Interval (sec)</label>
+                            <input type="number" id="setting-news-interval" value="${settings.scheduling?.news_interval_s || 1200}" step="60">
+                        </div>
+                        <div class="setting-item">
+                            <label>Health Check (min)</label>
+                            <input type="number" id="setting-health-refresh" value="${settings.scheduling?.health_refresh_min || 20}" step="5">
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('settingsGrid').innerHTML = settingsHTML;
+            } catch (error) {
+                console.error('Load settings error:', error);
+            }
+        }
+
+        async function loadHealth() {
+            try {
+                const health = await fetch('/api/health').then(r => r.json());
+
+                let healthItems = [];
+
+                // Parse health data properly
+                Object.entries(health).forEach(([key, value]) => {
+                    if (key === 'error') return; // Skip error key
+
+                    let parsedValue = value;
+
+                    // If value is a string, try to parse it as JSON
+                    if (typeof value === 'string') {
+                        try {
+                            parsedValue = JSON.parse(value);
+                        } catch (e) {
+                            // Keep as string if not JSON
+                        }
+                    }
+
+                    // Handle nested status object
+                    if (typeof parsedValue === 'object' && parsedValue !== null) {
+                        // Check if it has a 'status' field that's also JSON
+                        if (parsedValue.status && typeof parsedValue.status === 'string') {
+                            try {
+                                const nestedData = JSON.parse(parsedValue.status);
+                                parsedValue = nestedData;
+                            } catch (e) {
+                                // Keep original if not JSON
+                            }
+                        }
+
+                        const status = (parsedValue.status || 'OK').toLowerCase();
+                        const statusBadge = status === 'error' ? 'danger' :
+                                          status === 'high' || status === 'critical' ? 'warning' :
+                                          status === 'ok' ? 'success' : 'info';
+
+                        let details = '';
+                        Object.entries(parsedValue).forEach(([k, v]) => {
+                            if (k !== 'status' && v !== null && v !== undefined) {
+                                if (k === 'violations' && Array.isArray(v)) {
+                                    details += `<div style="margin-top: 5px;">⚠️ ${v.join(', ')}</div>`;
+                                } else if (typeof v === 'object') {
+                                    details += `<div style="margin-top: 5px;"><strong>${k}:</strong> ${JSON.stringify(v)}</div>`;
+                                } else {
+                                    details += `<div style="margin-top: 5px;"><strong>${k}:</strong> ${v}</div>`;
+                                }
+                            }
+                        });
+
+                        healthItems.push(`
+                            <div class="log-entry ${status}">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <strong style="text-transform: capitalize;">${key}</strong>
+                                    <span class="badge badge-${statusBadge}">${parsedValue.status || 'OK'}</span>
+                                </div>
+                                ${details}
+                            </div>
+                        `);
+                    } else {
+                        healthItems.push(`
+                            <div class="log-entry">
+                                <strong>${key}:</strong> ${parsedValue}
+                            </div>
+                        `);
+                    }
+                });
+
+                document.getElementById('healthStatus').innerHTML = healthItems.join('') || '<div class="empty-state">No health data</div>';
+            } catch (error) {
+                console.error('Load health error:', error);
+                document.getElementById('healthStatus').innerHTML = '<div class="empty-state">Failed to load health data</div>';
+            }
+        }
+
+        async function loadEvents() {
+            try {
+                const data = await fetch('/api/status').then(r => r.json());
+                const events = data.events || [];
+
+                if (events.length === 0) {
+                    document.getElementById('eventsLog').innerHTML = '<div class="empty-state">No recent events</div>';
+                    return;
+                }
+
+                const eventsHTML = events.slice(0, 50).map(event => {
+                    const timestamp = new Date(event.timestamp || event.ts).toLocaleString();
+                    const type = event.event_type || 'info';
+                    const message = event.message || '';
+
+                    return `
+                        <div class="log-entry ${type}">
+                            <span class="log-time">${timestamp}</span>
+                            <strong>${type.toUpperCase()}:</strong> ${message}
+                        </div>
+                    `;
+                }).join('');
+
+                document.getElementById('eventsLog').innerHTML = eventsHTML;
+            } catch (error) {
+                console.error('Load events error:', error);
+                document.getElementById('eventsLog').innerHTML = '<div class="empty-state">Failed to load events</div>';
+            }
+        }
+
+        async function saveSettings() {
+            // Parse crypto universe from comma-separated string
+            const cryptoUniverseStr = document.getElementById('setting-crypto-universe').value;
+            const cryptoUniverse = cryptoUniverseStr.split(',').map(s => s.trim()).filter(s => s);
+
+            const settings = {
+                thresholds: {
+                    enter: parseFloat(document.getElementById('setting-enter').value),
+                    take_profit_pct: parseFloat(document.getElementById('setting-take-profit').value),
+                    trade_stop_loss_bps: parseFloat(document.getElementById('setting-stop-loss').value),
+                    daily_stop_loss_pct: parseFloat(document.getElementById('setting-daily-stop').value)
+                },
+                risk: {
+                    max_position_size_pct: parseFloat(document.getElementById('setting-max-position').value),
+                    max_total_exposure_pct: parseFloat(document.getElementById('setting-max-exposure').value),
+                    max_positions: parseInt(document.getElementById('setting-max-positions').value),
+                    risk_per_trade_pct: parseFloat(document.getElementById('setting-risk-per-trade').value),
+                    trailing_stop_pct: parseFloat(document.getElementById('setting-trailing-stop').value),
+                    max_hold_time_minutes: parseInt(document.getElementById('setting-max-hold-time').value),
+                    trailing_stop_enabled: document.getElementById('setting-trailing-enabled').checked,
+                    close_all_eod: document.getElementById('setting-close-eod').checked
+                },
+                strategies: {
+                    momentum: document.getElementById('setting-momentum').checked,
+                    mean_reversion: document.getElementById('setting-mean-reversion').checked,
+                    news: document.getElementById('setting-news').checked,
+                    earnings: document.getElementById('setting-earnings').checked,
+                    crypto: document.getElementById('setting-crypto').checked
+                },
+                crypto: {
+                    enabled: document.getElementById('setting-crypto-enabled').checked,
+                    universe: cryptoUniverse
+                },
+                scheduling: {
+                    candidate_refresh_min: parseInt(document.getElementById('setting-candidate-refresh').value),
+                    candidate_max_symbols: parseInt(document.getElementById('setting-max-symbols').value),
+                    news_interval_s: parseInt(document.getElementById('setting-news-interval').value),
+                    health_refresh_min: parseInt(document.getElementById('setting-health-refresh').value)
+                }
+            };
+
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    alert('✅ Settings saved successfully!\n\nThe bot will use these settings on the next iteration.');
+
+                    // Refresh to show updated settings
+                    await loadSettings();
+                } else {
+                    alert('❌ Failed to save settings: ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Error saving settings: ' + error.message);
+            }
+        }
+
+        async function closePosition(symbol) {
+            if (!confirm(`Close position in ${symbol}?`)) return;
+
+            try {
+                // This would need a backend endpoint to close positions
+                alert(`Close position functionality needs backend implementation for ${symbol}`);
+            } catch (error) {
+                alert('Error closing position: ' + error.message);
+            }
+        }
+
+        async function closeAllPositions() {
+            if (!confirm('Close ALL positions? This cannot be undone.')) return;
+
+            try {
+                alert('Close all positions functionality needs backend implementation');
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+        }
+
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(value || 0);
+        }
+    </script>
+</body>
+</html>

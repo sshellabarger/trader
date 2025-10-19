@@ -85,14 +85,27 @@ class StateStore:
         """Set value in key-value store"""
         conn = sqlite3.connect(self.db_path)
         try:
-            conn.execute("""
-                INSERT OR REPLACE INTO kv (key, value, updated_at)
-                VALUES (?, ?, ?)
-            """, (key, value, datetime.now().isoformat()))
+            # Check what columns exist
+            cursor = conn.execute("PRAGMA table_info(kv)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            if 'updated_at' in columns:
+                # New schema with timestamp
+                conn.execute("""
+                    INSERT OR REPLACE INTO kv (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                """, (key, value, datetime.now().isoformat()))
+            else:
+                # Old schema without timestamp
+                conn.execute("""
+                    INSERT OR REPLACE INTO kv (key, value)
+                    VALUES (?, ?)
+                """, (key, value))
+
             conn.commit()
         finally:
             conn.close()
-    
+
     def delete_kv(self, key: str):
         """Delete key from key-value store"""
         conn = sqlite3.connect(self.db_path)
@@ -101,7 +114,7 @@ class StateStore:
             conn.commit()
         finally:
             conn.close()
-    
+
     def add_event(self, event_type: str, message: str, details: str = None):
         """Add event to event log"""
         conn = sqlite3.connect(self.db_path)
@@ -113,62 +126,134 @@ class StateStore:
             conn.commit()
         finally:
             conn.close()
-    
+
     def get_recent_events(self, limit: int = 50) -> List[Dict]:
         """Get recent events"""
         conn = sqlite3.connect(self.db_path)
         try:
-            cursor = conn.execute("""
-                SELECT timestamp, event_type, message, details
-                FROM events
-                ORDER BY timestamp DESC
-                LIMIT ?
-            """, (limit,))
-            
-            events = []
-            for row in cursor.fetchall():
-                events.append({
-                    'timestamp': row[0],
-                    'event_type': row[1],
-                    'message': row[2],
-                    'details': row[3]
-                })
-            return events
+            # Check what columns exist in events table
+            cursor = conn.execute("PRAGMA table_info(events)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            if not columns:
+                # Table doesn't exist or is empty
+                return []
+
+            # Adapt query to available columns
+            if 'timestamp' in columns:
+                cursor = conn.execute("""
+                    SELECT timestamp, event_type, message, details
+                    FROM events
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, (limit,))
+
+                events = []
+                for row in cursor.fetchall():
+                    events.append({
+                        'timestamp': row[0],
+                        'event_type': row[1],
+                        'message': row[2],
+                        'details': row[3]
+                    })
+                return events
+            elif 'ts' in columns:
+                # Alternative timestamp column name
+                cursor = conn.execute("""
+                    SELECT ts, event_type, message, details
+                    FROM events
+                    ORDER BY ts DESC
+                    LIMIT ?
+                """, (limit,))
+
+                events = []
+                for row in cursor.fetchall():
+                    events.append({
+                        'timestamp': row[0],
+                        'event_type': row[1],
+                        'message': row[2],
+                        'details': row[3]
+                    })
+                return events
+            else:
+                # No timestamp column - return empty
+                return []
+        except Exception as e:
+            # If query fails, return empty list
+            return []
         finally:
             conn.close()
-    
+
     def update_health(self, component: str, status: str, details: str = None):
         """Update health status for a component"""
         conn = sqlite3.connect(self.db_path)
         try:
-            conn.execute("""
-                INSERT OR REPLACE INTO health (component, status, last_check, details)
-                VALUES (?, ?, ?, ?)
-            """, (component, status, datetime.now().isoformat(), details))
+            # Check what columns exist in health table
+            cursor = conn.execute("PRAGMA table_info(health)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            if 'component' in columns:
+                # New schema
+                conn.execute("""
+                    INSERT OR REPLACE INTO health (component, status, last_check, details)
+                    VALUES (?, ?, ?, ?)
+                """, (component, status, datetime.now().isoformat(), details))
+            else:
+                # Old schema - store as KV instead
+                import json
+                health_data = self.get_kv('health') or '{}'
+                try:
+                    health = json.loads(health_data)
+                except:
+                    health = {}
+
+                health[component] = {
+                    'status': status,
+                    'last_check': datetime.now().isoformat(),
+                    'details': details
+                }
+                self.set_kv('health', json.dumps(health))
+
             conn.commit()
         finally:
             conn.close()
-    
+
     def get_health(self) -> Dict[str, Dict]:
         """Get health status for all components"""
         conn = sqlite3.connect(self.db_path)
         try:
-            cursor = conn.execute("""
-                SELECT component, status, last_check, details
-                FROM health
-            """)
-            
-            health = {}
-            for row in cursor.fetchall():
-                health[row[0]] = {
-                    'status': row[1],
-                    'last_check': row[2],
-                    'details': row[3]
-                }
-            return health
+            # Check if health table exists and has correct schema
+            cursor = conn.execute("PRAGMA table_info(health)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            if 'component' in columns:
+                # New schema
+                cursor = conn.execute("""
+                    SELECT component, status, last_check, details
+                    FROM health
+                """)
+
+                health = {}
+                for row in cursor.fetchall():
+                    health[row[0]] = {
+                        'status': row[1],
+                        'last_check': row[2],
+                        'details': row[3]
+                    }
+                return health
+            else:
+                # Old schema - get from KV
+                import json
+                health_data = self.get_kv('health')
+                if health_data:
+                    try:
+                        return json.loads(health_data)
+                    except:
+                        return {}
+                return {}
         finally:
             conn.close()
-    
+
     def record_trade(
         self,
         symbol: str,
@@ -189,7 +274,7 @@ class StateStore:
             conn.commit()
         finally:
             conn.close()
-    
+
     def get_recent_trades(self, limit: int = 50) -> List[Dict]:
         """Get recent trades"""
         conn = sqlite3.connect(self.db_path)
@@ -200,7 +285,7 @@ class StateStore:
                 ORDER BY timestamp DESC
                 LIMIT ?
             """, (limit,))
-            
+
             trades = []
             for row in cursor.fetchall():
                 trades.append({
@@ -216,7 +301,7 @@ class StateStore:
             return trades
         finally:
             conn.close()
-    
+
     def get_trades_by_symbol(self, symbol: str) -> List[Dict]:
         """Get all trades for a specific symbol"""
         conn = sqlite3.connect(self.db_path)
@@ -227,7 +312,7 @@ class StateStore:
                 WHERE symbol = ?
                 ORDER BY timestamp DESC
             """, (symbol,))
-            
+
             trades = []
             for row in cursor.fetchall():
                 trades.append({
@@ -256,13 +341,36 @@ def _get_store():
     return _default_store
 
 
-def get_kv(key: str) -> Optional[str]:
-    """Backward compatible function"""
-    return _get_store().get_kv(key)
+def get_kv(key: str, default=None) -> Optional[str]:
+    """
+    Backward compatible function with optional default parameter
+
+    Args:
+        key: Key to retrieve
+        default: Default value if key not found (for webapp compatibility)
+    """
+    result = _get_store().get_kv(key)
+    if result is None and default is not None:
+        # If default is provided and key not found, return default
+        # But we need to handle the case where webapp expects JSON parsing
+        if isinstance(default, dict):
+            import json
+            return json.dumps(default)
+        return default
+    return result
 
 
-def set_kv(key: str, value: str):
-    """Backward compatible function"""
+def set_kv(key: str, value):
+    """
+    Backward compatible function
+    Accepts both string and dict values (converts dict to JSON)
+    """
+    if isinstance(value, (dict, list)):
+        import json
+        value = json.dumps(value)
+    elif not isinstance(value, str):
+        value = str(value)
+
     _get_store().set_kv(key, value)
 
 
@@ -343,7 +451,11 @@ def get_candidates() -> List[Dict]:
     if candidates_json:
         try:
             import json
-            return json.loads(candidates_json)
+            result = json.loads(candidates_json)
+            # Ensure it returns a list
+            if isinstance(result, dict):
+                return result.get('candidates', [])
+            return result if isinstance(result, list) else []
         except:
             return []
     return []
