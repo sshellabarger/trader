@@ -1,125 +1,355 @@
-from __future__ import annotations
+"""
+Enhanced State Store with Class Wrapper
+Maintains backward compatibility with function-based state
+"""
+import sqlite3
+import os
+from datetime import datetime
+from typing import Optional, Dict, List, Any
+import json
 
-import os, sqlite3, json, time, threading, pathlib
-from typing import Any, Dict, List, Optional
 
-_DB_PATH = os.environ.get("TRADING_BOT_DB", "./data/trading_bot.db")
-pathlib.Path(os.path.dirname(_DB_PATH) or ".").mkdir(parents=True, exist_ok=True)
-
-_lock = threading.RLock()
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
-    return conn
-
-_CONN = _connect()
-
-def init_db() -> None:
-    with _lock, _CONN:
-        _CONN.execute("""
-        CREATE TABLE IF NOT EXISTS kv (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            updated_ts REAL
-        )
-        """)
-        _CONN.execute("""
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts REAL,
-            level TEXT,
-            msg TEXT,
-            meta TEXT
-        )
-        """)
-        _CONN.execute("""
-        CREATE TABLE IF NOT EXISTS health (
-            name TEXT PRIMARY KEY,
-            ok INTEGER,
-            detail TEXT,
-            ts REAL
-        )
-        """)
-        _CONN.execute("""
-        CREATE TABLE IF NOT EXISTS positions (
-            symbol TEXT PRIMARY KEY,
-            qty REAL,
-            avg_entry REAL,
-            updated_ts REAL
-        )
-        """)
-
-init_db()
-
-def set_kv(key: str, value: Any) -> None:
-    ts = time.time()
-    with _lock, _CONN:
-        _CONN.execute(
-            "INSERT INTO kv(key,value,updated_ts) VALUES(?,?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_ts=excluded.updated_ts",
-            (key, json.dumps(value), ts)
-        )
-
-def get_kv(key: str, default: Any=None) -> Any:
-    with _lock, _CONN:
-        cur = _CONN.execute("SELECT value FROM kv WHERE key=?", (key,))
-        row = cur.fetchone()
-    if not row: return default
-    try:
-        return json.loads(row["value"])
-    except Exception:
-        return default
-
-def add_event(level: str, msg: str, meta: Optional[Dict[str, Any]]=None) -> None:
-    ts = time.time()
-    with _lock, _CONN:
-        _CONN.execute(
-            "INSERT INTO events(ts,level,msg,meta) VALUES(?,?,?,?)",
-            (ts, level.upper(), msg, json.dumps(meta or {}))
-        )
-
-def list_events(n: int=200) -> List[Dict[str, Any]]:
-    with _lock, _CONN:
-        cur = _CONN.execute("SELECT ts,level,msg,meta FROM events ORDER BY ts DESC LIMIT ?", (n,))
-        rows = cur.fetchall()
-    out = []
-    for r in rows:
-        d = {"ts": r["ts"], "level": r["level"], "msg": r["msg"]}
+class StateStore:
+    """
+    Object-oriented wrapper for state management
+    Provides backward-compatible interface
+    """
+    
+    def __init__(self, db_path: str = './data/trading_bot.db'):
+        self.db_path = db_path
+        self._ensure_db_exists()
+    
+    def _ensure_db_exists(self):
+        """Ensure database and tables exist"""
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
+        conn = sqlite3.connect(self.db_path)
         try:
-            d["meta"] = json.loads(r["meta"] or "{}")
-        except Exception:
-            d["meta"] = {}
-        out.append(d)
-    return out[::-1]  # chronological
+            # Create base tables if they don't exist
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    details TEXT
+                )
+            """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS health (
+                    component TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    last_check TEXT NOT NULL,
+                    details TEXT
+                )
+            """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    qty INTEGER NOT NULL,
+                    price REAL NOT NULL,
+                    order_id TEXT,
+                    strategy TEXT,
+                    details TEXT
+                )
+            """)
+            
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def get_kv(self, key: str) -> Optional[str]:
+        """Get value from key-value store"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute("SELECT value FROM kv WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+    
+    def set_kv(self, key: str, value: str):
+        """Set value in key-value store"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO kv (key, value, updated_at)
+                VALUES (?, ?, ?)
+            """, (key, value, datetime.now().isoformat()))
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def delete_kv(self, key: str):
+        """Delete key from key-value store"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("DELETE FROM kv WHERE key = ?", (key,))
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def add_event(self, event_type: str, message: str, details: str = None):
+        """Add event to event log"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("""
+                INSERT INTO events (timestamp, event_type, message, details)
+                VALUES (?, ?, ?, ?)
+            """, (datetime.now().isoformat(), event_type, message, details))
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def get_recent_events(self, limit: int = 50) -> List[Dict]:
+        """Get recent events"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute("""
+                SELECT timestamp, event_type, message, details
+                FROM events
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (limit,))
+            
+            events = []
+            for row in cursor.fetchall():
+                events.append({
+                    'timestamp': row[0],
+                    'event_type': row[1],
+                    'message': row[2],
+                    'details': row[3]
+                })
+            return events
+        finally:
+            conn.close()
+    
+    def update_health(self, component: str, status: str, details: str = None):
+        """Update health status for a component"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO health (component, status, last_check, details)
+                VALUES (?, ?, ?, ?)
+            """, (component, status, datetime.now().isoformat(), details))
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def get_health(self) -> Dict[str, Dict]:
+        """Get health status for all components"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute("""
+                SELECT component, status, last_check, details
+                FROM health
+            """)
+            
+            health = {}
+            for row in cursor.fetchall():
+                health[row[0]] = {
+                    'status': row[1],
+                    'last_check': row[2],
+                    'details': row[3]
+                }
+            return health
+        finally:
+            conn.close()
+    
+    def record_trade(
+        self,
+        symbol: str,
+        side: str,
+        qty: int,
+        price: float,
+        order_id: str = '',
+        strategy: str = '',
+        details: str = None
+    ):
+        """Record a trade"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("""
+                INSERT INTO trades (timestamp, symbol, side, qty, price, order_id, strategy, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (datetime.now().isoformat(), symbol, side, qty, price, order_id, strategy, details))
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def get_recent_trades(self, limit: int = 50) -> List[Dict]:
+        """Get recent trades"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute("""
+                SELECT timestamp, symbol, side, qty, price, order_id, strategy, details
+                FROM trades
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (limit,))
+            
+            trades = []
+            for row in cursor.fetchall():
+                trades.append({
+                    'timestamp': row[0],
+                    'symbol': row[1],
+                    'side': row[2],
+                    'qty': row[3],
+                    'price': row[4],
+                    'order_id': row[5],
+                    'strategy': row[6],
+                    'details': row[7]
+                })
+            return trades
+        finally:
+            conn.close()
+    
+    def get_trades_by_symbol(self, symbol: str) -> List[Dict]:
+        """Get all trades for a specific symbol"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute("""
+                SELECT timestamp, side, qty, price, order_id, strategy, details
+                FROM trades
+                WHERE symbol = ?
+                ORDER BY timestamp DESC
+            """, (symbol,))
+            
+            trades = []
+            for row in cursor.fetchall():
+                trades.append({
+                    'timestamp': row[0],
+                    'side': row[1],
+                    'qty': row[2],
+                    'price': row[3],
+                    'order_id': row[4],
+                    'strategy': row[5],
+                    'details': row[6]
+                })
+            return trades
+        finally:
+            conn.close()
 
-def set_health(name: str, ok: bool, detail: str="", ts: Optional[float]=None) -> None:
-    if ts is None: ts = time.time()
-    with _lock, _CONN:
-        _CONN.execute(
-            "INSERT INTO health(name,ok,detail,ts) VALUES(?,?,?,?) "
-            "ON CONFLICT(name) DO UPDATE SET ok=excluded.ok, detail=excluded.detail, ts=excluded.ts",
-            (name, 1 if ok else 0, detail, ts)
-        )
 
-def get_health() -> List[Dict[str, Any]]:
-    with _lock, _CONN:
-        cur = _CONN.execute("SELECT name, ok, detail, ts FROM health ORDER BY name ASC")
-        rows = cur.fetchall()
-    return [{"name": r["name"], "ok": bool(r["ok"]), "detail": r["detail"], "ts": r["ts"]} for r in rows]
+# Backward compatibility functions (if your existing code uses these)
+_default_store = None
 
-def upsert_position(symbol: str, qty: float, avg_entry: float) -> None:
-    with _lock, _CONN:
-        _CONN.execute(
-            "INSERT INTO positions(symbol, qty, avg_entry, updated_ts) VALUES(?,?,?,?) "
-            "ON CONFLICT(symbol) DO UPDATE SET qty=excluded.qty, avg_entry=excluded.avg_entry, updated_ts=excluded.updated_ts",
-            (symbol.upper(), float(qty), float(avg_entry), time.time())
-        )
+def _get_store():
+    """Get or create default store instance"""
+    global _default_store
+    if _default_store is None:
+        db_path = os.environ.get('TRADING_BOT_DB', './data/trading_bot.db')
+        _default_store = StateStore(db_path)
+    return _default_store
 
-def get_positions() -> List[Dict[str, Any]]:
-    with _lock, _CONN:
-        cur = _CONN.execute("SELECT symbol, qty, avg_entry, updated_ts FROM positions ORDER BY symbol ASC")
-        rows = cur.fetchall()
-    return [{"symbol": r["symbol"], "qty": r["qty"], "avg_entry": r["avg_entry"], "updated": r["updated_ts"]} for r in rows]
+
+def get_kv(key: str) -> Optional[str]:
+    """Backward compatible function"""
+    return _get_store().get_kv(key)
+
+
+def set_kv(key: str, value: str):
+    """Backward compatible function"""
+    _get_store().set_kv(key, value)
+
+
+def delete_kv(key: str):
+    """Backward compatible function"""
+    _get_store().delete_kv(key)
+
+
+def add_event(event_type: str, message: str, details: str = None):
+    """Backward compatible function"""
+    _get_store().add_event(event_type, message, details)
+
+
+def get_recent_events(limit: int = 50) -> List[Dict]:
+    """Backward compatible function"""
+    return _get_store().get_recent_events(limit)
+
+
+def update_health(component: str, status: str, details: str = None):
+    """Backward compatible function"""
+    _get_store().update_health(component, status, details)
+
+
+def get_health() -> Dict[str, Dict]:
+    """Backward compatible function"""
+    return _get_store().get_health()
+
+
+def record_trade(
+    symbol: str,
+    side: str,
+    qty: int,
+    price: float,
+    order_id: str = '',
+    strategy: str = '',
+    details: str = None
+):
+    """Backward compatible function"""
+    _get_store().record_trade(symbol, side, qty, price, order_id, strategy, details)
+
+
+def get_recent_trades(limit: int = 50) -> List[Dict]:
+    """Backward compatible function"""
+    return _get_store().get_recent_trades(limit)
+
+
+def get_trades_by_symbol(symbol: str) -> List[Dict]:
+    """Backward compatible function"""
+    return _get_store().get_trades_by_symbol(symbol)
+
+
+def list_events(limit: int = 50) -> List[Dict]:
+    """Alias for get_recent_events (backward compatibility)"""
+    return get_recent_events(limit)
+
+
+def get_positions() -> List[Dict]:
+    """Get positions from KV store (backward compatibility)"""
+    positions_json = get_kv('positions')
+    if positions_json:
+        try:
+            import json
+            return json.loads(positions_json)
+        except:
+            return []
+    return []
+
+
+def set_positions(positions: List[Dict]):
+    """Set positions in KV store (backward compatibility)"""
+    import json
+    set_kv('positions', json.dumps(positions))
+
+
+def get_candidates() -> List[Dict]:
+    """Get candidates from KV store (backward compatibility)"""
+    candidates_json = get_kv('candidates')
+    if candidates_json:
+        try:
+            import json
+            return json.loads(candidates_json)
+        except:
+            return []
+    return []
+
+
+def set_candidates(candidates: List[Dict]):
+    """Set candidates in KV store (backward compatibility)"""
+    import json
+    set_kv('candidates', json.dumps(candidates))
