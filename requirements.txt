@@ -9,4 +9,5 @@ numpy>=2.1.2
 feedparser>=6.0.10
 aiofiles>=23.2.1
 pytest>=8.2.0
+httpx
 
