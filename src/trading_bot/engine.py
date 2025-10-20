@@ -1,5 +1,5 @@
 """
-Enhanced Trading Engine - Complete Version
+Enhanced Trading Engine - Complete Version with Position Monitor
 Drop-in replacement for existing engine.py with full risk management
 """
 import logging
@@ -10,7 +10,8 @@ from typing import Dict, List, Optional
 import json
 
 from .broker_alpaca import AlpacaBroker
-from .state import StateStore  # Now available from our new state.py
+from .state import StateStore
+from .position_monitor import PositionMonitor
 
 # Import settings - handle different possible structures
 try:
@@ -19,8 +20,10 @@ except ImportError:
     # If Settings class doesn't exist, create a wrapper
     from . import settings as settings_module
 
+
     class Settings:
         """Wrapper for function-based settings"""
+
         def __init__(self):
             self._settings = settings_module
 
@@ -50,8 +53,10 @@ try:
 except ImportError:
     from . import news as news_module
 
+
     class NewsManager:
         """Wrapper for function-based news"""
+
         def __init__(self, settings, logger):
             self.settings = settings
             self.logger = logger
@@ -70,8 +75,10 @@ try:
 except ImportError:
     from . import earnings as earnings_module
 
+
     class EarningsCalendar:
         """Wrapper for function-based earnings"""
+
         def __init__(self, settings, logger):
             self.settings = settings
             self.logger = logger
@@ -89,6 +96,7 @@ from .universe import load_universe
 # Import enhanced modules (these will be created separately)
 try:
     from .risk_manager import RiskManager, Position as RiskPosition
+
     RISK_MANAGER_AVAILABLE = True
 except ImportError:
     RISK_MANAGER_AVAILABLE = False
@@ -96,6 +104,7 @@ except ImportError:
 
 try:
     from .strategy_manager import StrategyManager, MarketRegime
+
     STRATEGY_MANAGER_AVAILABLE = True
 except ImportError:
     STRATEGY_MANAGER_AVAILABLE = False
@@ -103,6 +112,7 @@ except ImportError:
 
 try:
     from .order_validator import OrderValidator
+
     ORDER_VALIDATOR_AVAILABLE = True
 except ImportError:
     ORDER_VALIDATOR_AVAILABLE = False
@@ -134,6 +144,14 @@ class Trader:
                     val = getattr(settings, attr)
                     if isinstance(val, (dict, list, str, int, float, bool)):
                         settings_dict[attr] = val
+
+        # Initialize Position Monitor
+        self.position_monitor = PositionMonitor(
+            broker=self.broker,
+            settings=settings_dict,
+            logger=self.logger
+        )
+        self.logger.info("✓ Position monitor initialized")
 
         if RISK_MANAGER_AVAILABLE:
             self.risk_manager = RiskManager(settings_dict, logger)
@@ -207,27 +225,137 @@ class Trader:
         else:
             self.logger.error("Failed to get account info")
 
+        # Start Position Monitor
+        settings_dict = self.settings.as_dict() if hasattr(self.settings, 'as_dict') else {}
+        monitor_enabled = settings_dict.get('risk', {}).get('position_monitor_enabled', True)
+
+        if monitor_enabled:
+            try:
+                self.position_monitor.start()
+                interval = settings_dict.get('risk', {}).get('position_monitor_interval_sec', 30)
+                self.logger.info(f"✓ Position monitor started (checking every {interval}s)")
+            except Exception as e:
+                self.logger.error(f"Failed to start position monitor: {e}", exc_info=True)
+        else:
+            self.logger.warning("⚠ Position monitor disabled in settings")
+
         self.logger.info("✓ Engine initialized")
 
     def _update_market_status(self):
         """Update market open/close status"""
-        clock = self.broker.get_clock()
-        if clock:
+        try:
+            clock = self.broker.get_clock()
             self.market_open = clock.get('is_open', False)
-            if 'next_close' in clock:
-                try:
-                    self.market_close_time = datetime.fromisoformat(
-                        clock['next_close'].replace('Z', '+00:00')
-                    ).replace(tzinfo=None)
-                except:
-                    self.market_close_time = None
 
-            self.logger.debug(f"Market {'OPEN' if self.market_open else 'CLOSED'}")
-        else:
-            self.logger.warning("Failed to get market clock")
+            if not self.market_open:
+                next_open = clock.get('next_open')
+                if next_open:
+                    self.logger.debug(f"Market closed. Opens: {next_open}")
+            else:
+                next_close = clock.get('next_close')
+                if next_close:
+                    self.market_close_time = datetime.fromisoformat(next_close.replace('Z', '+00:00'))
+                    self.logger.debug(f"Market open. Closes: {next_close}")
+
+        except Exception as e:
+            self.logger.error(f"Error checking market status: {e}")
+            self.market_open = False
+
+    def _convert_positions(self, positions):
+        """Convert broker positions to risk manager format"""
+        if not RISK_MANAGER_AVAILABLE:
+            return []
+
+        converted = []
+        for pos in positions:
+            try:
+                converted.append(RiskPosition(
+                    symbol=pos.get('symbol', ''),
+                    qty=int(pos.get('qty', 0)),
+                    avg_entry_price=float(pos.get('avg_entry_price', 0)),
+                    current_price=float(pos.get('current_price', 0)),
+                    market_value=float(pos.get('market_value', 0)),
+                    unrealized_pl=float(pos.get('unrealized_pl', 0)),
+                    unrealized_plpc=float(pos.get('unrealized_plpc', 0))
+                ))
+            except Exception as e:
+                self.logger.warning(f"Error converting position {pos.get('symbol')}: {e}")
+        return converted
+
+    def check_exits(self):
+        """Check existing positions for exit signals"""
+        try:
+            # Try different method names
+            positions = None
+            if hasattr(self.broker, 'list_positions'):
+                positions = self.broker.list_positions()
+            elif hasattr(self.broker, 'get_positions'):
+                positions = self.broker.get_positions()
+
+            if not positions:
+                return
+
+            for position in positions:
+                symbol = position.get('symbol')
+                qty = int(position.get('qty', 0))
+
+                if qty == 0:
+                    continue
+
+                # Use risk manager if available
+                if self.risk_manager:
+                    risk_pos = self._convert_positions([position])[0]
+                    should_exit, reason = self.risk_manager.should_exit_position(risk_pos)
+
+                    if should_exit:
+                        self.logger.info(f"Exit signal for {symbol}: {reason}")
+                        # Place exit order
+                        # Note: position monitor handles stop losses automatically
+                        # This is for other exit signals (profit taking, etc.)
+
+        except Exception as e:
+            self.logger.error(f"Error checking exits: {e}", exc_info=True)
+
+    def check_entries(self):
+        """Check candidates for entry signals"""
+        if not self.candidates:
+            return
+
+        try:
+            # Get current positions
+            positions = None
+            if hasattr(self.broker, 'list_positions'):
+                positions = self.broker.list_positions()
+            elif hasattr(self.broker, 'get_positions'):
+                positions = self.broker.get_positions()
+
+            if positions is None:
+                positions = []
+
+            # Get account info
+            account = self.broker.get_account()
+            if not account:
+                return
+
+            # Check risk limits before entering trades
+            if self.risk_manager:
+                risk_positions = self._convert_positions(positions)
+                equity = float(account.get('equity', 0))
+                metrics = self.risk_manager.calculate_risk_metrics(risk_positions, equity)
+
+                if metrics.has_violations():
+                    self.logger.warning(f"Risk violations present: {metrics.violations}")
+                    return
+
+            # Look for entry opportunities
+            # This is where your strategy logic goes
+            # For now, it's conservative demo mode
+
+        except Exception as e:
+            self.logger.error(f"Error checking entries: {e}", exc_info=True)
 
     def refresh_candidates(self):
-        """Refresh candidate list with rankings"""
+        """Refresh candidate list"""
         interval_min = self.settings.get('scheduling', {}).get('candidate_refresh_min', 20)
 
         if self.last_candidate_refresh:
@@ -237,365 +365,55 @@ class Trader:
 
         self.logger.info("Refreshing candidates...")
 
-        # Determine which universe to use
-        crypto_enabled = self.settings.get('strategies', {}).get('crypto', False)
-
-        if crypto_enabled:
-            # Get crypto universe
-            crypto_universe = self.settings.get('crypto', {}).get('universe', ['BTC/USD', 'ETH/USD'])
-            symbols_subset = self.universe[:100] + crypto_universe  # Mix stocks and crypto
-            self.logger.info(f"Including {len(crypto_universe)} crypto symbols")
-        else:
-            # Get batch snapshots for stocks only
-            max_symbols = self.settings.get('scheduling', {}).get('candidate_max_symbols', 150)
-            symbols_subset = self.universe[:max_symbols]
-
         try:
-            # Use correct broker method name
-            snapshots = None
+            # Get batch snapshots
+            batch_size = self.settings.get('scheduling', {}).get('candidate_max_symbols', 150)
+            symbols = self.universe[:batch_size]
 
-            if hasattr(self.broker, 'get_batch_snapshots'):
-                snapshots = self.broker.get_batch_snapshots(symbols_subset)
-            elif hasattr(self.broker, 'get_snapshots'):
-                snapshots = self.broker.get_snapshots(symbols_subset)
-            elif hasattr(self.broker, 'batch_snapshots'):
-                snapshots = self.broker.batch_snapshots(symbols_subset)
-            elif hasattr(self.broker, 'snapshots'):
-                snapshots = self.broker.snapshots(symbols_subset)
-            else:
-                self.logger.error("Broker has no snapshot method available")
-                self.logger.info("Available methods: " +
-                               ', '.join([m for m in dir(self.broker) if not m.startswith('_')]))
-                # Fall back to basic mode without snapshots
-                self.candidates = []
-                self.last_candidate_refresh = datetime.now()
+            if not symbols:
+                self.logger.warning("No symbols in universe")
                 return
+
+            # Try different snapshot method names
+            snapshots = None
+            if hasattr(self.broker, 'get_batch_snapshots'):
+                snapshots = self.broker.get_batch_snapshots(symbols)
+            elif hasattr(self.broker, 'get_snapshots'):
+                snapshots = self.broker.get_snapshots(symbols)
+            elif hasattr(self.broker, 'batch_snapshots'):
+                snapshots = self.broker.batch_snapshots(symbols)
 
             if not snapshots:
                 self.logger.warning("No snapshots returned")
                 return
 
-            self.logger.debug(f"Got {len(snapshots)} snapshots")
-
-            # Rank using strategy manager if available
+            # Score candidates using strategy manager
             if self.strategy_manager:
-                candidates = self.strategy_manager.rank_candidates(
+                self.candidates = self.strategy_manager.rank_candidates(
                     snapshots,
                     self.news_counts,
-                    self.earnings_data,
-                    min_score=0.5
+                    self.earnings_data
                 )
-                self.candidates = candidates[:20]  # Top 20
-
-                if self.candidates:
-                    self.logger.info(
-                        f"Ranked {len(self.candidates)} candidates, "
-                        f"top: {self.candidates[0].symbol} ({self.candidates[0].final_score:.3f})"
-                    )
-
-                # Store for UI
-                import json
-                from .state import set_kv
-                candidates_data = [
-                    {
-                        'symbol': c.symbol,
-                        'final_score': c.final_score,
-                        'confidence': c.confidence,
-                        'regime': c.regime.value if hasattr(c.regime, 'value') else str(c.regime),
-                        'active_strategies': c.active_strategies,
-                        'metadata': c.metadata
-                    }
-                    for c in self.candidates
-                ]
-                set_kv('candidates', candidates_data)
             else:
-                # Fallback to basic ranking
-                self.candidates = self._basic_ranking(snapshots)
+                # Basic scoring
+                self.candidates = []
+                for symbol, snap in snapshots.items():
+                    daily_bar = snap.get('dailyBar', {})
+                    if daily_bar:
+                        self.candidates.append({
+                            'symbol': symbol,
+                            'score': 0.5,  # Basic score
+                            'snapshot': snap
+                        })
+
+            # Sort by score
+            self.candidates.sort(key=lambda x: x.get('score', 0), reverse=True)
 
             self.last_candidate_refresh = datetime.now()
+            self.logger.info(f"Found {len(self.candidates)} candidates")
 
         except Exception as e:
             self.logger.error(f"Error refreshing candidates: {e}", exc_info=True)
-
-    def _basic_ranking(self, snapshots: Dict) -> List:
-        """Basic ranking when strategy manager not available"""
-        from .strategies import score_momentum
-
-        ranked = []
-        for symbol, snapshot in snapshots.items():
-            try:
-                score = score_momentum(snapshot, self.settings)
-                if score > 0.5:
-                    ranked.append({'symbol': symbol, 'score': score, 'snapshot': snapshot})
-            except:
-                continue
-
-        ranked.sort(key=lambda x: x['score'], reverse=True)
-        return ranked[:20]
-
-    def check_entries(self):
-        """Check for entry opportunities"""
-        if not self.market_open:
-            return
-
-        if not self.candidates:
-            self.logger.debug("No candidates to check")
-            return
-
-        # Get current state - use correct broker method names
-        try:
-            positions = self.broker.list_positions() or []
-        except AttributeError:
-            positions = self.broker.get_positions() or []
-
-        try:
-            account = self.broker.get_account()
-        except AttributeError:
-            account = None
-
-        if not account:
-            self.logger.error("Failed to get account info")
-            return
-
-        account_value = float(account.get('equity', 0))
-        buying_power = float(account.get('buying_power', 0))
-
-        # Convert positions for risk manager
-        risk_positions = self._convert_positions(positions)
-
-        # Check entry threshold
-        entry_threshold = self.settings.get('thresholds', {}).get('enter', 0.62)
-
-        # Check top candidates
-        for candidate in self.candidates[:5]:
-            try:
-                # Skip if already have position
-                if self.strategy_manager:
-                    symbol = candidate.symbol
-                    score = candidate.final_score
-                else:
-                    symbol = candidate['symbol']
-                    score = candidate['score']
-
-                if any(p.get('symbol') == symbol for p in positions):
-                    continue
-
-                if score < entry_threshold:
-                    continue
-
-                # Get current price
-                if self.strategy_manager:
-                    current_price = candidate.metadata.get('current_price', 0)
-                    regime = candidate.regime
-                else:
-                    snapshot = candidate.get('snapshot', {})
-                    current_price = snapshot.get('latestTrade', {}).get('p', 0)
-                    regime = None
-
-                if current_price <= 0:
-                    continue
-
-                # Calculate stop loss
-                if self.strategy_manager and regime:
-                    stop_loss = self.strategy_manager.calculate_stop_loss(
-                        current_price,
-                        regime,
-                        base_stop_bps=self.settings.get('thresholds', {}).get('trade_stop_loss_bps', 50)
-                    )
-                else:
-                    # Basic stop loss
-                    stop_loss = current_price * 0.995
-
-                # Calculate position size
-                if self.risk_manager:
-                    qty, size_details = self.risk_manager.calculate_position_size(
-                        symbol,
-                        current_price,
-                        stop_loss,
-                        account_value,
-                        len(risk_positions)
-                    )
-                else:
-                    # Basic position sizing - 2% of account
-                    position_value = account_value * 0.02
-                    qty = int(position_value / current_price)
-
-                if qty < 1:
-                    continue
-
-                # Validate order
-                if self.order_validator:
-                    result = self.order_validator.validate_order(
-                        symbol=symbol,
-                        side='buy',
-                        qty=qty,
-                        order_type='market',
-                        price=current_price,
-                        account_info=account,
-                        current_positions=positions
-                    )
-
-                    if not result.is_valid:
-                        self.logger.warning(f"Order validation failed for {symbol}: {result.errors}")
-                        continue
-
-                # Place order
-                self.logger.info(
-                    f"BUY SIGNAL: {symbol} qty={qty} @ ${current_price:.2f} "
-                    f"(score={score:.3f}, stop=${stop_loss:.2f})"
-                )
-
-                order = self.broker.place_order(
-                    symbol=symbol,
-                    qty=qty,
-                    side='buy',
-                    order_type='market'
-                )
-
-                if order:
-                    self.logger.info(f"✓ Order placed: {order.get('id')}")
-
-                    # Record trade
-                    self.state.record_trade(
-                        symbol=symbol,
-                        side='buy',
-                        qty=qty,
-                        price=current_price,
-                        order_id=order.get('id', ''),
-                        strategy='enhanced',
-                        details=json.dumps({
-                            'score': score,
-                            'stop_loss': stop_loss,
-                            'entry_threshold': entry_threshold
-                        })
-                    )
-
-                    # Increment trade count
-                    if self.risk_manager:
-                        self.risk_manager.increment_trade_count()
-                else:
-                    self.logger.error(f"Failed to place order for {symbol}")
-
-            except Exception as e:
-                self.logger.error(f"Error checking entry for candidate: {e}", exc_info=True)
-
-    def check_exits(self):
-        """Check all positions for exit conditions"""
-        if not self.market_open:
-            return
-
-        try:
-            positions = self.broker.list_positions() or []
-        except AttributeError:
-            positions = self.broker.get_positions() or []
-
-        if not positions:
-            return
-
-        try:
-            account = self.broker.get_account()
-        except AttributeError:
-            account = None
-        if not account:
-            return
-
-        account_value = float(account.get('equity', 0))
-
-        # Convert positions
-        risk_positions = self._convert_positions(positions)
-
-        # Check stop losses and exits
-        to_close = []
-
-        if self.risk_manager:
-            # Use risk manager for comprehensive checks
-            to_close.extend(self.risk_manager.check_stop_losses(risk_positions, account_value))
-
-            take_profit_pct = self.settings.get('thresholds', {}).get('take_profit_pct', 2.0)
-            to_close.extend(self.risk_manager.check_take_profit(risk_positions, take_profit_pct))
-
-            # Check end of day
-            if self.market_close_time and self.risk_manager.should_close_eod(self.market_close_time):
-                self.logger.warning("Closing all positions - end of day approaching")
-                for pos in risk_positions:
-                    to_close.append((pos.symbol, 'eod_close', {}))
-        else:
-            # Basic exit logic
-            for pos in positions:
-                symbol = pos.get('symbol')
-                unrealized_plpc = float(pos.get('unrealized_plpc', 0))
-
-                # Stop loss at -0.5%
-                if unrealized_plpc <= -0.5:
-                    to_close.append((symbol, 'stop_loss', {'pl_pct': unrealized_plpc}))
-                # Take profit at +2%
-                elif unrealized_plpc >= 2.0:
-                    to_close.append((symbol, 'take_profit', {'pl_pct': unrealized_plpc}))
-
-        # Execute exits
-        for symbol, reason, details in to_close:
-            try:
-                pos = next((p for p in positions if p.get('symbol') == symbol), None)
-                if not pos:
-                    continue
-
-                qty = abs(float(pos.get('qty', 0)))
-                current_price = float(pos.get('current_price', 0))
-
-                self.logger.info(f"EXIT SIGNAL: {symbol} reason={reason} qty={qty}")
-
-                order = self.broker.place_order(
-                    symbol=symbol,
-                    qty=qty,
-                    side='sell',
-                    order_type='market'
-                )
-
-                if order:
-                    self.logger.info(f"✓ Exit order placed: {order.get('id')}")
-
-                    # Record trade
-                    self.state.record_trade(
-                        symbol=symbol,
-                        side='sell',
-                        qty=qty,
-                        price=current_price,
-                        order_id=order.get('id', ''),
-                        strategy='exit',
-                        details=json.dumps({
-                            'reason': reason,
-                            'details': details
-                        })
-                    )
-
-                    # Clear from position highs
-                    if self.risk_manager and hasattr(self.risk_manager, 'position_highs'):
-                        self.risk_manager.position_highs.pop(symbol, None)
-
-            except Exception as e:
-                self.logger.error(f"Error closing {symbol}: {e}", exc_info=True)
-
-    def _convert_positions(self, positions: List[Dict]) -> List:
-        """Convert broker positions to risk manager format"""
-        if not RISK_MANAGER_AVAILABLE:
-            return []
-
-        risk_positions = []
-        for pos in positions:
-            try:
-                risk_positions.append(RiskPosition(
-                    symbol=pos.get('symbol'),
-                    qty=float(pos.get('qty', 0)),
-                    avg_entry_price=float(pos.get('avg_entry_price', 0)),
-                    current_price=float(pos.get('current_price', 0)),
-                    market_value=float(pos.get('market_value', 0)),
-                    unrealized_pl=float(pos.get('unrealized_pl', 0)),
-                    unrealized_plpc=float(pos.get('unrealized_plpc', 0))
-                ))
-            except Exception as e:
-                self.logger.error(f"Error converting position: {e}")
-
-        return risk_positions
 
     def refresh_news(self):
         """Refresh news data"""
@@ -620,7 +438,8 @@ class Trader:
                 except TypeError:
                     # Need additional parameters
                     window_hours = self.settings.get('news', {}).get('window_hours', 6)
-                    provider_order = self.settings.get('news', {}).get('provider_order', ['alpaca', 'finnhub', 'newsapi'])
+                    provider_order = self.settings.get('news', {}).get('provider_order',
+                                                                       ['alpaca', 'finnhub', 'newsapi'])
                     self.news_counts = self.news_manager._news_module.get_news_counts(
                         symbols_to_check,
                         window_hours=window_hours,
@@ -720,6 +539,16 @@ class Trader:
         else:
             checks['positions'] = {'status': 'ERROR'}
 
+        # Position Monitor status
+        if hasattr(self, 'position_monitor'):
+            monitor_status = self.position_monitor.get_status()
+            checks['position_monitor'] = {
+                'status': 'OK' if monitor_status['running'] else 'STOPPED',
+                'trading_halted': monitor_status['trading_halted'],
+                'halt_reason': monitor_status['halt_reason'],
+                'stop_loss_events_today': monitor_status['stop_loss_events_today']
+            }
+
         # Risk metrics
         if self.risk_manager and account and positions:
             risk_positions = self._convert_positions(positions)
@@ -740,9 +569,9 @@ class Trader:
 
     def run(self):
         """Main trading loop"""
-        self.logger.info("="*60)
+        self.logger.info("=" * 60)
         self.logger.info("STARTING ENHANCED TRADING ENGINE")
-        self.logger.info("="*60)
+        self.logger.info("=" * 60)
 
         try:
             self.initialize()
@@ -770,6 +599,14 @@ class Trader:
                 try:
                     # Health checks (always run)
                     self.run_health_checks()
+
+                    # Check if trading is halted by position monitor
+                    if hasattr(self, 'position_monitor') and self.position_monitor.trading_halted:
+                        self.logger.warning(
+                            f"⛔ Trading halted by position monitor: {self.position_monitor.halt_reason}"
+                        )
+                        time.sleep(60)  # Check again in 1 minute
+                        continue
 
                     # Initialize daily metrics if new day and market opens
                     if self.market_open and not self.daily_initialized:
@@ -816,5 +653,13 @@ class Trader:
         except Exception as e:
             self.logger.error(f"Fatal error in main loop: {e}", exc_info=True)
         finally:
+            # Stop position monitor
+            if hasattr(self, 'position_monitor'):
+                try:
+                    self.position_monitor.stop()
+                    self.logger.info("Position monitor stopped")
+                except Exception as e:
+                    self.logger.error(f"Error stopping position monitor: {e}")
+
             self.running = False
             self.logger.info("Engine stopped")

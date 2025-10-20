@@ -1,15 +1,20 @@
 README.md
 pyproject.toml
 src/trading_bot/__init__.py
+src/trading_bot/backtesting.py
 src/trading_bot/broker_alpaca.py
 src/trading_bot/cli.py
 src/trading_bot/earnings.py
 src/trading_bot/engine.py
 src/trading_bot/logger.py
+src/trading_bot/migrations.py
 src/trading_bot/news.py
+src/trading_bot/order_validator.py
+src/trading_bot/risk_manager.py
 src/trading_bot/settings.py
 src/trading_bot/state.py
 src/trading_bot/strategies.py
+src/trading_bot/strategy_manager.py
 src/trading_bot/universe.py
 src/trading_bot/webapp.py
 src/trading_bot.egg-info/PKG-INFO
@@ -18,3 +23,5 @@ src/trading_bot.egg-info/dependency_links.txt
 src/trading_bot.egg-info/requires.txt
 src/trading_bot.egg-info/top_level.txt
 tests/test_imports.py
+tests/test_util_import.py
+tests/test_webapp_routes.py

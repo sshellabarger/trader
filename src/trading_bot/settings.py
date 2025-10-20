@@ -23,9 +23,9 @@ strategies = {
     "mean_reversion": True,
     "news": True,
     "earnings": True,
-    "longterm_trend": False,
-    "longterm_momentum": False,
-    "crypto": False
+    "longterm_trend": True,
+    "longterm_momentum": True,
+    "crypto": True
 }
 
 thresholds = {
@@ -68,7 +68,9 @@ risk = {
     "max_hold_time_minutes": 240,
     "close_all_eod": True,
     "max_daily_trades": 50,
-    "min_trade_value": 100
+    "min_trade_value": 100,
+    "position_monitor_interval_sec": 30,  # Check every 30 seconds
+    "position_monitor_enabled": True
 }
 
 backtest = {
