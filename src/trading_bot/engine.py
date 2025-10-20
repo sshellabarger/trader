@@ -178,6 +178,10 @@ class Trader:
         """Initialize engine and load data"""
         self.logger.info("Initializing trading engine...")
 
+        # Log available broker methods for debugging
+        snapshot_methods = [m for m in dir(self.broker) if 'snapshot' in m.lower()]
+        self.logger.debug(f"Broker snapshot methods: {snapshot_methods}")
+
         # Load universe
         try:
             self.universe = load_universe(self.settings)
@@ -247,7 +251,26 @@ class Trader:
             symbols_subset = self.universe[:max_symbols]
 
         try:
-            snapshots = self.broker.get_batch_snapshots(symbols_subset)
+            # Use correct broker method name
+            snapshots = None
+
+            if hasattr(self.broker, 'get_batch_snapshots'):
+                snapshots = self.broker.get_batch_snapshots(symbols_subset)
+            elif hasattr(self.broker, 'get_snapshots'):
+                snapshots = self.broker.get_snapshots(symbols_subset)
+            elif hasattr(self.broker, 'batch_snapshots'):
+                snapshots = self.broker.batch_snapshots(symbols_subset)
+            elif hasattr(self.broker, 'snapshots'):
+                snapshots = self.broker.snapshots(symbols_subset)
+            else:
+                self.logger.error("Broker has no snapshot method available")
+                self.logger.info("Available methods: " +
+                               ', '.join([m for m in dir(self.broker) if not m.startswith('_')]))
+                # Fall back to basic mode without snapshots
+                self.candidates = []
+                self.last_candidate_refresh = datetime.now()
+                return
+
             if not snapshots:
                 self.logger.warning("No snapshots returned")
                 return
@@ -588,7 +611,24 @@ class Trader:
         try:
             # Get news for subset of symbols
             symbols_to_check = self.universe[:60]  # Batch of 60
-            self.news_counts = self.news_manager.get_news_counts(symbols_to_check)
+
+            # Check if news_manager has the right method signature
+            if hasattr(self.news_manager, 'get_news_counts'):
+                try:
+                    # Try with just symbols
+                    self.news_counts = self.news_manager.get_news_counts(symbols_to_check)
+                except TypeError:
+                    # Need additional parameters
+                    window_hours = self.settings.get('news', {}).get('window_hours', 6)
+                    provider_order = self.settings.get('news', {}).get('provider_order', ['alpaca', 'finnhub', 'newsapi'])
+                    self.news_counts = self.news_manager._news_module.get_news_counts(
+                        symbols_to_check,
+                        window_hours=window_hours,
+                        provider_order=provider_order
+                    )
+            else:
+                self.news_counts = {}
+
             self.last_news_refresh = datetime.now()
 
             total_articles = sum(self.news_counts.values())
@@ -596,6 +636,7 @@ class Trader:
 
         except Exception as e:
             self.logger.error(f"Error refreshing news: {e}", exc_info=True)
+            self.news_counts = {}  # Set empty dict on error
 
     def refresh_earnings(self):
         """Refresh earnings calendar"""
