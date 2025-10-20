@@ -637,14 +637,18 @@
                     try {
                         positions = JSON.parse(positions);
                     } catch (e) {
+                        console.error('Failed to parse positions:', e);
                         positions = [];
                     }
                 }
 
                 // Ensure it's an array
                 if (!Array.isArray(positions)) {
+                    console.warn('Positions is not an array:', typeof positions);
                     positions = [];
                 }
+
+                console.log('Loaded positions:', positions.length); // DEBUG
 
                 document.getElementById('positionCount').textContent = positions.length;
 
@@ -654,7 +658,7 @@
                             <div style="font-size: 48px;">📊</div>
                             <div>No open positions</div>
                             <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
-                                ${document.getElementById('marketStatusText').textContent === 'Market Closed'
+                                ${document.getElementById('marketStatusText')?.textContent === 'Market Closed'
                                     ? 'Market is currently closed'
                                     : 'Waiting for entry signals...'}
                             </div>
@@ -666,6 +670,7 @@
                     return;
                 }
 
+                // WE HAVE POSITIONS - RENDER THEM
                 let totalValue = 0;
                 let totalPL = 0;
 
@@ -681,51 +686,68 @@
                             <td>${formatCurrency(pos.avg_entry_price)}</td>
                             <td>${formatCurrency(pos.current_price)}</td>
                             <td>${formatCurrency(pos.market_value)}</td>
-                            <td class="stat-change ${plClass}">
-                                ${formatCurrency(pos.unrealized_pl)} (${pos.unrealized_plpc?.toFixed(2)}%)
-                            </td>
-                            <td>
-                                <button class="btn btn-sm btn-danger" onclick="closePosition('${pos.symbol}')">
-                                    Close
-                                </button>
-                            </td>
+                            <td class="${plClass}">${formatCurrency(pos.unrealized_pl)}</td>
+                            <td class="${plClass}">${(parseFloat(pos.unrealized_plpc) || 0).toFixed(2)}%</td>
                         </tr>
                     `;
                 }).join('');
 
+                // Render the table with headers
                 document.getElementById('positionsTable').innerHTML = `
-                    <table>
+                    <table class="data-table">
                         <thead>
                             <tr>
                                 <th>Symbol</th>
-                                <th>Quantity</th>
-                                <th>Avg Entry</th>
+                                <th>Qty</th>
+                                <th>Avg Price</th>
                                 <th>Current</th>
-                                <th>Market Value</th>
-                                <th>Unrealized P/L</th>
-                                <th>Actions</th>
+                                <th>Value</th>
+                                <th>P/L</th>
+                                <th>P/L %</th>
                             </tr>
                         </thead>
-                        <tbody>${rows}</tbody>
+                        <tbody>
+                            ${rows}
+                        </tbody>
                     </table>
                 `;
 
-                // Update exposure
-                const equity = parseFloat(document.getElementById('equity').textContent.replace(/[$,]/g, ''));
-                const exposurePct = equity > 0 ? (totalValue / equity * 100).toFixed(1) : 0;
-                document.getElementById('exposurePct').textContent = `${exposurePct}% exposure`;
+                // Update summary stats
+                const account = await fetch('/api/account').then(r => r.json()).catch(() => null);
+                if (account) {
+                    const equity = parseFloat(account.equity || 0);
+                    const exposurePct = equity > 0 ? (totalValue / equity * 100).toFixed(1) : 0;
+                    const dailyPLPct = equity > 0 ? (totalPL / equity * 100).toFixed(2) : 0;
 
-                // Update daily P/L
-                document.getElementById('dailyPL').textContent = formatCurrency(totalPL);
-                const plClass = totalPL >= 0 ? 'positive' : 'negative';
-                document.getElementById('dailyPL').className = `stat-value ${plClass}`;
-                const plPct = equity > 0 ? (totalPL / equity * 100).toFixed(2) : '0.00';
-                document.getElementById('dailyPLPct').textContent = `${plPct}%`;
-                document.getElementById('dailyPLPct').className = `stat-change ${plClass}`;
+                    document.getElementById('exposurePct').textContent = `${exposurePct}% exposure`;
+                    document.getElementById('dailyPL').textContent = formatCurrency(totalPL);
+                    document.getElementById('dailyPLPct').textContent = `${dailyPLPct}%`;
+
+                    // Add color class for P/L
+                    const plElement = document.getElementById('dailyPL');
+                    plElement.className = totalPL >= 0 ? 'positive' : 'negative';
+                }
+
+                console.log('✓ Rendered', positions.length, 'positions'); // DEBUG
 
             } catch (error) {
-                console.error('Load positions error:', error);
+                console.error('Error loading positions:', error);
+                document.getElementById('positionsTable').innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px;">⚠️</div>
+                        <div>Error loading positions</div>
+                        <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
+                            ${error.message}
+                        </div>
+                    </div>
+                `;
             }
+        }
+
+        // Helper function for currency formatting
+        function formatCurrency(value) {
+            const num = parseFloat(value || 0);
+            return '$' + num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         }
 
         async function loadCandidates() {
