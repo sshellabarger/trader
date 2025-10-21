@@ -134,7 +134,6 @@
             margin-bottom: 20px;
             border-bottom: 2px solid var(--border);
             padding-bottom: 10px;
-            flex-wrap: wrap;
         }
 
         .tab {
@@ -230,12 +229,11 @@
         th {
             text-align: left;
             padding: 12px;
-            background: var(--bg-dark);
-            color: var(--text-secondary);
-            font-weight: 600;
             font-size: 13px;
+            color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            border-bottom: 2px solid var(--border);
         }
 
         td {
@@ -255,47 +253,26 @@
             font-weight: 600;
         }
 
-        .badge-success {
-            background: rgba(16, 185, 129, 0.2);
-            color: var(--success);
-        }
-
-        .badge-danger {
-            background: rgba(239, 68, 68, 0.2);
-            color: var(--danger);
-        }
-
-        .badge-warning {
-            background: rgba(245, 158, 11, 0.2);
-            color: var(--warning);
-        }
-
-        .badge-info {
-            background: rgba(6, 182, 212, 0.2);
-            color: var(--info);
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 40px;
-            color: var(--text-secondary);
-            font-size: 16px;
-        }
+        .badge-success { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+        .badge-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+        .badge-warning { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+        .badge-info { background: rgba(6, 182, 212, 0.15); color: var(--info); }
 
         .settings-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
         }
 
         .setting-group {
-            background: var(--bg-dark);
+            background: rgba(255, 255, 255, 0.02);
             padding: 20px;
             border-radius: 8px;
+            border: 1px solid var(--border);
         }
 
         .setting-group h3 {
-            font-size: 18px;
+            font-size: 16px;
             margin-bottom: 15px;
             color: var(--accent);
         }
@@ -306,407 +283,549 @@
 
         .setting-item label {
             display: block;
-            margin-bottom: 5px;
-            font-size: 14px;
+            font-size: 13px;
             color: var(--text-secondary);
+            margin-bottom: 5px;
         }
 
-        .setting-item input[type="number"],
-        .setting-item input[type="text"] {
+        .setting-item small {
+            display: block;
+            margin-top: 4px;
+            font-size: 11px;
+        }
+
+        .setting-item input,
+        .setting-item select {
             width: 100%;
-            padding: 10px;
-            background: var(--bg-card);
+            padding: 8px 12px;
+            background: var(--bg-dark);
             border: 1px solid var(--border);
             border-radius: 6px;
             color: var(--text-primary);
             font-size: 14px;
         }
 
-        .setting-item label.toggle {
+        .setting-item input:focus,
+        .setting-item select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .toggle {
             display: flex;
             align-items: center;
             gap: 10px;
-            cursor: pointer;
         }
 
-        .setting-item input[type="checkbox"] {
-            width: 20px;
-            height: 20px;
+        .toggle input[type="checkbox"] {
+            width: 50px;
+            height: 26px;
+            appearance: none;
+            background: var(--border);
+            border-radius: 13px;
+            position: relative;
             cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .toggle input[type="checkbox"]:checked {
+            background: var(--success);
+        }
+
+        .toggle input[type="checkbox"]::before {
+            content: '';
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: white;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s;
+        }
+
+        .toggle input[type="checkbox"]:checked::before {
+            transform: translateX(24px);
         }
 
         .log-entry {
-            padding: 12px;
-            margin-bottom: 10px;
-            background: var(--bg-dark);
-            border-radius: 6px;
-            border-left: 3px solid var(--accent);
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'Courier New', monospace;
         }
 
-        .log-entry.error {
-            border-left-color: var(--danger);
-        }
-
-        .log-entry.warning {
-            border-left-color: var(--warning);
-        }
-
-        .log-entry.success {
-            border-left-color: var(--success);
-        }
+        .log-entry.info { border-left-color: var(--info); }
+        .log-entry.warning { border-left-color: var(--warning); }
+        .log-entry.error { border-left-color: var(--danger); }
+        .log-entry.success { border-left-color: var(--success); }
 
         .log-time {
-            font-size: 12px;
             color: var(--text-secondary);
             margin-right: 10px;
         }
 
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 15px;
+            opacity: 0.3;
+        }
+
+        .refresh-timer {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
         @media (max-width: 768px) {
-            .settings-grid {
+            .grid-2 {
                 grid-template-columns: 1fr;
             }
-            
-            .tabs {
-                overflow-x: auto;
+
+            .header-content {
+                flex-direction: column;
+                align-items: flex-start;
             }
+        }
+
+        .score-bar {
+            width: 100px;
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .score-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--danger), var(--warning), var(--success));
+            transition: width 0.3s;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: var(--accent);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- Header -->
         <header>
             <div class="header-content">
                 <div class="header-title">
                     <h1>🤖 Enhanced Trading Bot</h1>
-                    <p style="color: var(--text-secondary); font-size: 14px;">Real-time monitoring & control</p>
-                </div>
-                <div>
-                    <span class="market-status" id="marketStatus">
+                    <div class="market-status" id="marketStatus">
                         <span class="status-dot"></span>
-                        Loading...
-                    </span>
+                        <span id="marketStatusText">Checking...</span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <span class="refresh-timer" id="refreshTimer">Auto-refresh: 20s</span>
+                    <button class="btn btn-primary" onclick="refreshAll()">
+                        <span id="refreshBtn">🔄 Refresh Now</span>
+                    </button>
                 </div>
             </div>
         </header>
 
+        <!-- Account Summary -->
         <div class="account-summary" id="accountSummary">
-            <!-- Account stats will be inserted here -->
             <div class="stat-card">
-                <div class="stat-label">Equity</div>
-                <div class="stat-value">Loading...</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Cash</div>
-                <div class="stat-value">Loading...</div>
+                <div class="stat-label">Account Equity</div>
+                <div class="stat-value" id="equity">$0.00</div>
+                <div class="stat-change" id="equityChange">+0.00%</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Buying Power</div>
-                <div class="stat-value">Loading...</div>
+                <div class="stat-value" id="buyingPower">$0.00</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Open Positions</div>
-                <div class="stat-value">...</div>
+                <div class="stat-value" id="positionCount">0</div>
+                <div class="stat-change" id="exposurePct">0% exposure</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Daily P/L</div>
+                <div class="stat-value" id="dailyPL">$0.00</div>
+                <div class="stat-change" id="dailyPLPct">0.00%</div>
             </div>
         </div>
 
+        <!-- Tabs -->
         <div class="tabs">
             <button class="tab active" onclick="switchTab('positions')">📊 Positions</button>
             <button class="tab" onclick="switchTab('candidates')">🎯 Candidates</button>
             <button class="tab" onclick="switchTab('settings')">⚙️ Settings</button>
-            <button class="tab" onclick="switchTab('health')">🏥 Health</button>
-            <button class="tab" onclick="switchTab('events')">📝 Events</button>
+            <button class="tab" onclick="switchTab('logs')">📝 Logs & Status</button>
         </div>
 
         <!-- Positions Tab -->
-        <div id="positions-tab" class="tab-content active">
+        <div class="tab-content active" id="positions-tab">
             <div class="card">
                 <div class="card-header">
-                    <h2 class="card-title">Open Positions</h2>
-                    <button class="btn btn-danger btn-sm" onclick="closeAllPositions()">Close All</button>
+                    <h2 class="card-title">Current Positions</h2>
+                    <button class="btn btn-sm btn-danger" onclick="closeAllPositions()">Close All</button>
                 </div>
-                <div id="positionsTable">
-                    <div class="empty-state">Loading positions...</div>
-                </div>
+                <div id="positionsTable"></div>
             </div>
         </div>
 
         <!-- Candidates Tab -->
-        <div id="candidates-tab" class="tab-content">
+        <div class="tab-content" id="candidates-tab">
             <div class="card">
                 <div class="card-header">
-                    <h2 class="card-title">Trading Candidates</h2>
-                    <button class="btn btn-primary btn-sm" onclick="loadCandidates()">🔄 Refresh</button>
+                    <h2 class="card-title">Top Candidates</h2>
+                    <span class="badge badge-info" id="candidateCount">0 candidates</span>
                 </div>
-                <div id="candidatesTable">
-                    <div class="empty-state">Loading candidates...</div>
-                </div>
+                <div id="candidatesTable"></div>
             </div>
         </div>
 
         <!-- Settings Tab -->
-        <div id="settings-tab" class="tab-content">
+        <div class="tab-content" id="settings-tab">
             <div class="card">
                 <div class="card-header">
-                    <h2 class="card-title">Bot Configuration</h2>
+                    <h2 class="card-title">Bot Settings</h2>
                     <button class="btn btn-success" onclick="saveSettings()">💾 Save Settings</button>
                 </div>
-                <div class="settings-grid" id="settingsGrid">
-                    <div class="empty-state">Loading settings...</div>
-                </div>
+                <div class="settings-grid" id="settingsGrid"></div>
             </div>
         </div>
 
-        <!-- Health Tab -->
-        <div id="health-tab" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">System Health</h2>
-                    <button class="btn btn-primary btn-sm" onclick="loadHealth()">🔄 Refresh</button>
+        <!-- Logs Tab -->
+        <div class="tab-content" id="logs-tab">
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">System Health</h2>
+                    </div>
+                    <div id="healthStatus"></div>
                 </div>
-                <div id="healthStatus">
-                    <div class="empty-state">Loading health data...</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Events Tab -->
-        <div id="events-tab" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">Recent Events</h2>
-                    <button class="btn btn-primary btn-sm" onclick="loadEvents()">🔄 Refresh</button>
-                </div>
-                <div id="eventsLog">
-                    <div class="empty-state">Loading events...</div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Recent Events</h2>
+                    </div>
+                    <div id="eventsLog"></div>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        // Auto-refresh intervals
         let refreshInterval;
-        
-        // Initial load
-        document.addEventListener('DOMContentLoaded', function() {
-            loadAll();
-            // Refresh every 10 seconds
-            refreshInterval = setInterval(loadAll, 10000);
+        let countdown = 20;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshAll();
+            startAutoRefresh();
         });
 
-        async function loadAll() {
-            await Promise.all([
-                loadPositions(),
-                loadCandidates(),
-                loadSettings(),
-                loadHealth(),
-                updateMarketStatus()
-            ]);
+        function startAutoRefresh() {
+            refreshInterval = setInterval(() => {
+                countdown--;
+                document.getElementById('refreshTimer').textContent = `Auto-refresh: ${countdown}s`;
+
+                if (countdown <= 0) {
+                    refreshAll();
+                    countdown = 20;
+                }
+            }, 1000);
         }
 
-        async function updateMarketStatus() {
+        async function refreshAll() {
+            document.getElementById('refreshBtn').innerHTML = '<span class="loading"></span>';
+
+            try {
+                await Promise.all([
+                    loadAccount(),
+                    loadPositions(),
+                    loadCandidates(),
+                    loadSettings(),
+                    loadHealth(),
+                    loadEvents()
+                ]);
+            } catch (error) {
+                console.error('Refresh error:', error);
+            }
+
+            document.getElementById('refreshBtn').textContent = '🔄 Refresh Now';
+            countdown = 20;
+        }
+
+        async function loadAccount() {
             try {
                 const health = await fetch('/api/health').then(r => r.json());
-                const clockData = health.clock || health.system?.clock || {};
-                
-                let parsedClock = clockData;
-                if (typeof clockData === 'string') {
+
+                // Parse health data if it's double-encoded JSON
+                let parsedHealth = health;
+                if (health.system && typeof health.system === 'string') {
                     try {
-                        parsedClock = JSON.parse(clockData);
-                    } catch (e) {}
+                        parsedHealth = { system: JSON.parse(health.system) };
+                    } catch (e) {
+                        // Keep original
+                    }
                 }
-                
-                const isOpen = parsedClock.is_open || false;
-                const statusEl = document.getElementById('marketStatus');
-                
-                if (isOpen) {
-                    statusEl.className = 'market-status open';
-                    statusEl.innerHTML = '<span class="status-dot"></span> Market Open';
+
+                // Extract account and clock from nested structure
+                let account = {};
+                let clock = {};
+
+                if (parsedHealth.system?.status) {
+                    try {
+                        const systemData = typeof parsedHealth.system.status === 'string'
+                            ? JSON.parse(parsedHealth.system.status)
+                            : parsedHealth.system;
+                        account = systemData.account || {};
+                        clock = systemData.clock || {};
+                    } catch (e) {
+                        account = parsedHealth.account || health.account || {};
+                        clock = parsedHealth.clock || health.clock || {};
+                    }
                 } else {
-                    statusEl.className = 'market-status closed';
-                    statusEl.innerHTML = '<span class="status-dot"></span> Market Closed';
+                    account = parsedHealth.account || health.account || {};
+                    clock = parsedHealth.clock || health.clock || {};
                 }
 
-                // Update account summary - try multiple paths
-                const accountData = health.account || health.system?.account || {};
-                let parsedAccount = accountData;
-                if (typeof accountData === 'string') {
-                    try {
-                        parsedAccount = JSON.parse(accountData);
-                    } catch (e) {}
-                }
-                
-                // Extract account values with fallbacks
-                const equity = parseFloat(parsedAccount.equity || 0);
-                const cash = parseFloat(parsedAccount.cash || 0);
-                const buyingPower = parseFloat(parsedAccount.buying_power || parsedAccount.buyingPower || 0);
-                
-                // Get position count
-                const positionsData = health.positions || health.system?.positions || {};
-                let posCount = 0;
-                if (typeof positionsData === 'object' && positionsData.count !== undefined) {
-                    posCount = positionsData.count;
-                } else if (typeof positionsData === 'string') {
-                    try {
-                        const parsed = JSON.parse(positionsData);
-                        posCount = parsed.count || 0;
-                    } catch (e) {}
-                }
+                // Update account display
+                const equity = account.equity || 0;
+                document.getElementById('equity').textContent = formatCurrency(equity);
+                document.getElementById('buyingPower').textContent = formatCurrency(account.buying_power || 0);
 
-                // ALWAYS display account summary, even with zeros
-                document.getElementById('accountSummary').innerHTML = `
-                    <div class="stat-card">
-                        <div class="stat-label">Equity</div>
-                        <div class="stat-value">${formatCurrency(equity)}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Cash</div>
-                        <div class="stat-value">${formatCurrency(cash)}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Buying Power</div>
-                        <div class="stat-value">${formatCurrency(buyingPower)}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Open Positions</div>
-                        <div class="stat-value">${posCount}</div>
-                    </div>
-                `;
+                // Market status
+                const marketStatus = document.getElementById('marketStatus');
+                const isOpen = clock.is_open || false;
+                marketStatus.className = `market-status ${isOpen ? 'open' : 'closed'}`;
+                document.getElementById('marketStatusText').textContent = isOpen ? 'Market Open' : 'Market Closed';
             } catch (error) {
-                console.error('Update market status error:', error);
-                // Display error state account summary
-                document.getElementById('accountSummary').innerHTML = `
-                    <div class="stat-card">
-                        <div class="stat-label">Equity</div>
-                        <div class="stat-value">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Cash</div>
-                        <div class="stat-value">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Buying Power</div>
-                        <div class="stat-value">--</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Open Positions</div>
-                        <div class="stat-value">--</div>
-                    </div>
-                `;
+                console.error('Load account error:', error);
             }
         }
 
         async function loadPositions() {
             try {
                 const data = await fetch('/api/positions').then(r => r.json());
-                const positions = data.positions || [];
+                let positions = data.positions || [];
+
+                // Parse if it's a JSON string
+                if (typeof positions === 'string') {
+                    try {
+                        positions = JSON.parse(positions);
+                    } catch (e) {
+                        console.error('Failed to parse positions:', e);
+                        positions = [];
+                    }
+                }
+
+                // Ensure it's an array
+                if (!Array.isArray(positions)) {
+                    console.warn('Positions is not an array:', typeof positions);
+                    positions = [];
+                }
+
+                console.log('Loaded positions:', positions.length); // DEBUG
+
+                document.getElementById('positionCount').textContent = positions.length;
 
                 if (positions.length === 0) {
-                    document.getElementById('positionsTable').innerHTML = '<div class="empty-state">No open positions</div>';
+                    document.getElementById('positionsTable').innerHTML = `
+                        <div class="empty-state">
+                            <div style="font-size: 48px;">📊</div>
+                            <div>No open positions</div>
+                            <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
+                                ${document.getElementById('marketStatusText')?.textContent === 'Market Closed'
+                                    ? 'Market is currently closed'
+                                    : 'Waiting for entry signals...'}
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('exposurePct').textContent = '0% exposure';
+                    document.getElementById('dailyPL').textContent = '$0.00';
+                    document.getElementById('dailyPLPct').textContent = '0.00%';
                     return;
                 }
 
-                const tableHTML = `
-                    <table>
+                // WE HAVE POSITIONS - RENDER THEM
+                let totalValue = 0;
+                let totalPL = 0;
+
+                const rows = positions.map(pos => {
+                    totalValue += parseFloat(pos.market_value || 0);
+                    totalPL += parseFloat(pos.unrealized_pl || 0);
+                    const plClass = pos.unrealized_pl >= 0 ? 'positive' : 'negative';
+
+                    return `
+                        <tr>
+                            <td><strong>${pos.symbol}</strong></td>
+                            <td>${pos.qty}</td>
+                            <td>${formatCurrency(pos.avg_entry_price)}</td>
+                            <td>${formatCurrency(pos.current_price)}</td>
+                            <td>${formatCurrency(pos.market_value)}</td>
+                            <td class="${plClass}">${formatCurrency(pos.unrealized_pl)}</td>
+                            <td class="${plClass}">${(parseFloat(pos.unrealized_plpc) || 0).toFixed(2)}%</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                // Render the table with headers
+                document.getElementById('positionsTable').innerHTML = `
+                    <table class="data-table">
                         <thead>
                             <tr>
                                 <th>Symbol</th>
                                 <th>Qty</th>
-                                <th>Avg Entry</th>
+                                <th>Avg Price</th>
                                 <th>Current</th>
+                                <th>Value</th>
                                 <th>P/L</th>
                                 <th>P/L %</th>
-                                <th>Value</th>
-                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${positions.map(pos => {
-                                const pl = parseFloat(pos.unrealized_pl || 0);
-                                const plPct = parseFloat(pos.unrealized_plpc || 0) * 100;
-                                const plClass = pl >= 0 ? 'success' : 'danger';
-                                
-                                return `
-                                    <tr>
-                                        <td><strong>${pos.symbol}</strong></td>
-                                        <td>${pos.qty}</td>
-                                        <td>${formatCurrency(pos.avg_entry_price)}</td>
-                                        <td>${formatCurrency(pos.current_price)}</td>
-                                        <td class="badge-${plClass}">${formatCurrency(pl)}</td>
-                                        <td><span class="badge badge-${plClass}">${plPct.toFixed(2)}%</span></td>
-                                        <td>${formatCurrency(pos.market_value)}</td>
-                                        <td>
-                                            <button class="btn btn-danger btn-sm" onclick="closePosition('${pos.symbol}')">Close</button>
-                                        </td>
-                                    </tr>
-                                `;
-                            }).join('')}
+                            ${rows}
                         </tbody>
                     </table>
                 `;
 
-                document.getElementById('positionsTable').innerHTML = tableHTML;
+                // Update summary stats
+                const account = await fetch('/api/account').then(r => r.json()).catch(() => null);
+                if (account) {
+                    const equity = parseFloat(account.equity || 0);
+                    const exposurePct = equity > 0 ? (totalValue / equity * 100).toFixed(1) : 0;
+                    const dailyPLPct = equity > 0 ? (totalPL / equity * 100).toFixed(2) : 0;
+
+                    document.getElementById('exposurePct').textContent = `${exposurePct}% exposure`;
+                    document.getElementById('dailyPL').textContent = formatCurrency(totalPL);
+                    document.getElementById('dailyPLPct').textContent = `${dailyPLPct}%`;
+
+                    // Add color class for P/L
+                    const plElement = document.getElementById('dailyPL');
+                    plElement.className = totalPL >= 0 ? 'positive' : 'negative';
+                }
+
+                console.log('✓ Rendered', positions.length, 'positions'); // DEBUG
+
             } catch (error) {
-                console.error('Load positions error:', error);
-                document.getElementById('positionsTable').innerHTML = '<div class="empty-state">Failed to load positions</div>';
+                console.error('Error loading positions:', error);
+                document.getElementById('positionsTable').innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px;">⚠️</div>
+                        <div>Error loading positions</div>
+                        <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
+                            ${error.message}
+                        </div>
+                    </div>
+                `;
             }
+        }
+
+        // Helper function for currency formatting
+        function formatCurrency(value) {
+            const num = parseFloat(value || 0);
+            return '$' + num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         }
 
         async function loadCandidates() {
             try {
                 const data = await fetch('/api/candidates').then(r => r.json());
-                const candidates = data.candidates || [];
+                let candidates = data.candidates || [];
+
+                // Handle different data formats
+                if (!Array.isArray(candidates)) {
+                    candidates = [];
+                }
+
+                document.getElementById('candidateCount').textContent = `${candidates.length} candidates`;
 
                 if (candidates.length === 0) {
-                    document.getElementById('candidatesTable').innerHTML = '<div class="empty-state">No candidates available</div>';
+                    document.getElementById('candidatesTable').innerHTML = `
+                        <div class="empty-state">
+                            <div style="font-size: 48px;">🎯</div>
+                            <div>No candidates meet entry criteria</div>
+                            <div style="margin-top: 10px; font-size: 13px;">
+                                Try lowering the entry threshold in Settings
+                            </div>
+                        </div>
+                    `;
                     return;
                 }
 
-                const tableHTML = `
+                const rows = candidates.slice(0, 20).map(candidate => {
+                    const score = candidate.final_score || candidate.score || 0;
+                    const symbol = candidate.symbol || candidate.Symbol || 'N/A';
+                    const price = candidate.metadata?.current_price || candidate.price || 0;
+                    const regime = candidate.regime?.value || candidate.regime || 'unknown';
+                    const strategies = candidate.active_strategies || [];
+
+                    return `
+                        <tr>
+                            <td><strong>${symbol}</strong></td>
+                            <td>${formatCurrency(price)}</td>
+                            <td>
+                                <div class="score-bar">
+                                    <div class="score-fill" style="width: ${score * 100}%"></div>
+                                </div>
+                                <div style="font-size: 12px; margin-top: 4px;">${score.toFixed(3)}</div>
+                            </td>
+                            <td><span class="badge badge-info">${regime}</span></td>
+                            <td style="font-size: 12px;">
+                                ${strategies.slice(0, 3).map(s => `<span class="badge badge-success">${s}</span>`).join(' ')}
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                document.getElementById('candidatesTable').innerHTML = `
                     <table>
                         <thead>
                             <tr>
                                 <th>Symbol</th>
-                                <th>Score</th>
                                 <th>Price</th>
-                                <th>Change %</th>
-                                <th>Volume</th>
-                                <th>Strategies</th>
+                                <th>Score</th>
+                                <th>Regime</th>
+                                <th>Active Strategies</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            ${candidates.slice(0, 20).map(cand => {
-                                const score = (cand.score || cand.final_score || 0) * 100;
-                                const scoreClass = score >= 70 ? 'success' : score >= 50 ? 'warning' : 'info';
-                                const strategies = cand.active_strategies || cand.strategies || [];
-                                
-                                return `
-                                    <tr>
-                                        <td><strong>${cand.symbol}</strong></td>
-                                        <td><span class="badge badge-${scoreClass}">${score.toFixed(1)}</span></td>
-                                        <td>${formatCurrency(cand.current_price || cand.price || 0)}</td>
-                                        <td>${(cand.change_pct || 0).toFixed(2)}%</td>
-                                        <td>${(cand.volume || 0).toLocaleString()}</td>
-                                        <td style="font-size: 11px;">${strategies.join(', ')}</td>
-                                    </tr>
-                                `;
-                            }).join('')}
-                        </tbody>
+                        <tbody>${rows}</tbody>
                     </table>
                 `;
-
-                document.getElementById('candidatesTable').innerHTML = tableHTML;
             } catch (error) {
                 console.error('Load candidates error:', error);
-                document.getElementById('candidatesTable').innerHTML = '<div class="empty-state">Failed to load candidates</div>';
             }
         }
 
         async function loadSettings() {
             try {
                 const settings = await fetch('/api/settings').then(r => r.json());
-                
-                const settingsHTML = `
+
+                console.log('Loaded settings:', settings); // Debug output
+
+                 const settingsHTML = `
                     <div class="setting-group">
                         <h3>🎯 Trading Thresholds</h3>
                         <div class="setting-item">
@@ -903,21 +1022,14 @@
 
                         const status = (parsedValue.status || 'OK').toLowerCase();
                         const statusBadge = status === 'error' ? 'danger' :
-                                          status === 'stopped' ? 'danger' :
                                           status === 'high' || status === 'critical' ? 'warning' :
                                           status === 'ok' ? 'success' : 'info';
 
                         let details = '';
                         Object.entries(parsedValue).forEach(([k, v]) => {
                             if (k !== 'status' && v !== null && v !== undefined) {
-                                if (k === 'violations' && Array.isArray(v) && v.length > 0) {
+                                if (k === 'violations' && Array.isArray(v)) {
                                     details += `<div style="margin-top: 5px;">⚠️ ${v.join(', ')}</div>`;
-                                } else if (k === 'trading_halted' && v === true) {
-                                    details += `<div style="margin-top: 5px; color: var(--danger);">⛔ Trading Halted</div>`;
-                                } else if (k === 'halt_reason' && v) {
-                                    details += `<div style="margin-top: 5px;">Reason: ${v}</div>`;
-                                } else if (k === 'stop_loss_events_today' && v > 0) {
-                                    details += `<div style="margin-top: 5px;">Stop Loss Events: ${v}</div>`;
                                 } else if (typeof v === 'object') {
                                     details += `<div style="margin-top: 5px;"><strong>${k}:</strong> ${JSON.stringify(v)}</div>`;
                                 } else {
@@ -929,7 +1041,7 @@
                         healthItems.push(`
                             <div class="log-entry ${status}">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <strong style="text-transform: capitalize;">${key.replace(/_/g, ' ')}</strong>
+                                    <strong style="text-transform: capitalize;">${key}</strong>
                                     <span class="badge badge-${statusBadge}">${parsedValue.status || 'OK'}</span>
                                 </div>
                                 ${details}
@@ -1001,18 +1113,14 @@
                     trailing_stop_pct: parseFloat(document.getElementById('setting-trailing-stop').value),
                     max_hold_time_minutes: parseInt(document.getElementById('setting-max-hold-time').value),
                     trailing_stop_enabled: document.getElementById('setting-trailing-enabled').checked,
-                    close_all_eod: document.getElementById('setting-close-eod').checked,
-                    position_monitor_enabled: document.getElementById('setting-position-monitor-enabled').checked,
-                    position_monitor_interval_sec: parseInt(document.getElementById('setting-position-monitor-interval').value)
+                    close_all_eod: document.getElementById('setting-close-eod').checked
                 },
                 strategies: {
                     momentum: document.getElementById('setting-momentum').checked,
                     mean_reversion: document.getElementById('setting-mean-reversion').checked,
                     news: document.getElementById('setting-news').checked,
                     earnings: document.getElementById('setting-earnings').checked,
-                    longterm_trend: document.getElementById('setting-longterm-trend').checked,
-                    longterm_momentum: document.getElementById('setting-longterm-momentum').checked,
-                    crypto: document.getElementById('setting-crypto-strategy').checked
+                    crypto: document.getElementById('setting-crypto').checked
                 },
                 crypto: {
                     enabled: document.getElementById('setting-crypto-enabled').checked,
@@ -1021,10 +1129,8 @@
                 scheduling: {
                     candidate_refresh_min: parseInt(document.getElementById('setting-candidate-refresh').value),
                     candidate_max_symbols: parseInt(document.getElementById('setting-max-symbols').value),
+                    news_interval_s: parseInt(document.getElementById('setting-news-interval').value),
                     health_refresh_min: parseInt(document.getElementById('setting-health-refresh').value)
-                },
-                news: {
-                    news_interval_s: parseInt(document.getElementById('setting-news-interval').value)
                 }
             };
 
@@ -1054,40 +1160,20 @@
             if (!confirm(`Close position in ${symbol}?`)) return;
 
             try {
-                const response = await fetch(`/api/positions/${symbol}/close`, {
-                    method: 'POST'
-                });
-                const result = await response.json();
-
-                if (result.status === 'success') {
-                    alert(`✅ ${result.message}`);
-                    await loadPositions();
-                } else {
-                    alert(`❌ ${result.message}`);
-                }
+                // This would need a backend endpoint to close positions
+                alert(`Close position functionality needs backend implementation for ${symbol}`);
             } catch (error) {
-                alert('❌ Error closing position: ' + error.message);
+                alert('Error closing position: ' + error.message);
             }
         }
 
         async function closeAllPositions() {
-            if (!confirm('⚠️ Close ALL positions? This cannot be undone.')) return;
+            if (!confirm('Close ALL positions? This cannot be undone.')) return;
 
             try {
-                const response = await fetch('/api/positions/close-all', {
-                    method: 'POST'
-                });
-                const result = await response.json();
-
-                if (result.status === 'success') {
-                    alert(`✅ ${result.message}\n\nClosed: ${result.closed.join(', ')}\n` + 
-                          (result.failed.length > 0 ? `Failed: ${result.failed.join(', ')}` : ''));
-                    await loadPositions();
-                } else {
-                    alert(`❌ ${result.message}`);
-                }
+                alert('Close all positions functionality needs backend implementation');
             } catch (error) {
-                alert('❌ Error: ' + error.message);
+                alert('Error: ' + error.message);
             }
         }
 

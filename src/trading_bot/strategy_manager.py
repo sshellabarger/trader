@@ -44,10 +44,10 @@ class CombinedSignal:
 
 class RegimeDetector:
     """Detect market regime for a symbol"""
-
+    
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
-
+    
     def detect_regime(
         self,
         current_price: float,
@@ -279,16 +279,16 @@ class StrategyManager:
         Uses longer timeframe price action
         """
         details = {}
-
+        
         # Try to get multi-day price history if available
         prev_bars = snapshot.get('prevDailyBar', {})
-
+        
         # Calculate trend over available period
         if prev_close > 0:
             # Simple trend: current vs previous close
             trend_change = (current_price - prev_close) / prev_close
             details['trend_change_pct'] = trend_change * 100
-
+            
             # Score: positive for uptrends, scaled to 0-1
             if trend_change > 0:
                 score = min(1.0, trend_change * 10)  # Scale up small moves
@@ -297,7 +297,7 @@ class StrategyManager:
         else:
             score = 0.5
             details['note'] = 'insufficient_data'
-
+        
         details['score'] = score
         return score, details
 
@@ -307,17 +307,17 @@ class StrategyManager:
         Looks at sustained directional movement
         """
         details = {}
-
+        
         # Calculate momentum indicators
         if prev_close > 0 and open_price > 0:
             # Price momentum
             price_momentum = (current_price - prev_close) / prev_close
             details['price_momentum_pct'] = price_momentum * 100
-
+            
             # Gap momentum
             gap_momentum = (open_price - prev_close) / prev_close
             details['gap_momentum_pct'] = gap_momentum * 100
-
+            
             # Combined momentum score
             if price_momentum > 0 and gap_momentum > 0:
                 # Both positive - strong momentum
@@ -331,7 +331,7 @@ class StrategyManager:
         else:
             score = 0.5
             details['note'] = 'insufficient_data'
-
+        
         details['score'] = score
         return score, details
 
@@ -341,29 +341,29 @@ class StrategyManager:
         Crypto markets are 24/7 and more volatile
         """
         details = {}
-
+        
         # Check if this is a crypto symbol
         is_crypto = '/' in symbol or symbol in ['BTC', 'ETH', 'BTCUSD', 'ETHUSD']
         details['is_crypto'] = is_crypto
-
+        
         if not is_crypto:
             return 0, {'note': 'not_crypto'}
-
+        
         # Crypto-specific scoring
         # 1. Volatility is expected and not necessarily bad
         price_range = high - low
         price_range_pct = (price_range / open_price * 100) if open_price > 0 else 0
         details['price_range_pct'] = price_range_pct
-
+        
         # 2. 24/7 movement
         intraday_move = abs(current_price - open_price)
         intraday_move_pct = (intraday_move / open_price * 100) if open_price > 0 else 0
         details['intraday_move_pct'] = intraday_move_pct
-
+        
         # 3. Trend direction
         trend = (current_price - prev_close) / prev_close if prev_close > 0 else 0
         details['trend_pct'] = trend * 100
-
+        
         # Score: favor strong trends and volatility in crypto
         if trend > 0:
             # Uptrend: higher volatility = higher score
@@ -371,7 +371,7 @@ class StrategyManager:
         else:
             # Downtrend: lower score but not zero
             score = max(0.2, 0.5 + (trend * 3))
-
+        
         details['score'] = score
         return score, details
 
@@ -380,7 +380,7 @@ class StrategyManager:
         # Check if in crypto universe
         if symbol in self.crypto_universe:
             return True
-
+        
         # Check common crypto patterns
         crypto_patterns = ['/', 'USD', 'BTC', 'ETH', 'LTC', 'DOGE', 'ADA', 'SOL']
         return any(pattern in symbol for pattern in crypto_patterns)
@@ -579,11 +579,11 @@ class StrategyManager:
         }
 
         multiplier = regime_multipliers.get(regime, 1.0)
-
+        
         # Crypto needs wider stops due to higher volatility
         if is_crypto:
             multiplier *= 2.0
-
+        
         adjusted_stop_bps = base_stop_bps * multiplier
         stop_loss = entry_price * (1 - adjusted_stop_bps / 10000.0)
 

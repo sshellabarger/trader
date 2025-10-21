@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
+from dataclasses import asdict
 import json
 import logging
 
@@ -33,6 +34,33 @@ except:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+# Helper function to serialize dataclasses
+def serialize_candidate(candidate):
+    """Convert CombinedSignal dataclass to dict"""
+    try:
+        if hasattr(candidate, '__dataclass_fields__'):
+            # It's a dataclass - convert it
+            result = asdict(candidate)
+            # Convert enum to string
+            if 'regime' in result and hasattr(result['regime'], 'value'):
+                result['regime'] = result['regime'].value
+            return result
+        elif isinstance(candidate, dict):
+            # Already a dict
+            return candidate
+        else:
+            # Try to convert to dict
+            return dict(candidate)
+    except Exception as e:
+        logger.warning(f"Error serializing candidate: {e}")
+        # Return basic info as fallback
+        return {
+            'symbol': getattr(candidate, 'symbol', 'UNKNOWN'),
+            'final_score': getattr(candidate, 'final_score', 0),
+            'error': 'serialization_failed'
+        }
 
 
 # Pydantic models for request validation
@@ -155,9 +183,24 @@ async def api_candidates():
                 except:
                     candidates = []
 
-        return {"candidates": candidates if isinstance(candidates, list) else []}
+        # Serialize candidates (handle dataclasses)
+        serialized_candidates = []
+        if candidates:
+            for candidate in candidates:
+                try:
+                    serialized = serialize_candidate(candidate)
+                    serialized_candidates.append(serialized)
+                except Exception as e:
+                    logger.error(f"Error serializing candidate: {e}")
+                    # Add a basic version
+                    serialized_candidates.append({
+                        'symbol': str(candidate),
+                        'error': 'serialization_error'
+                    })
+
+        return {"candidates": serialized_candidates}
     except Exception as e:
-        logger.error(f"Error getting candidates: {e}")
+        logger.error(f"Error getting candidates: {e}", exc_info=True)
         return {"candidates": [], "error": str(e)}
 
 

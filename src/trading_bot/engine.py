@@ -20,10 +20,8 @@ except ImportError:
     # If Settings class doesn't exist, create a wrapper
     from . import settings as settings_module
 
-
     class Settings:
         """Wrapper for function-based settings"""
-
         def __init__(self):
             self._settings = settings_module
 
@@ -53,10 +51,8 @@ try:
 except ImportError:
     from . import news as news_module
 
-
     class NewsManager:
         """Wrapper for function-based news"""
-
         def __init__(self, settings, logger):
             self.settings = settings
             self.logger = logger
@@ -75,10 +71,8 @@ try:
 except ImportError:
     from . import earnings as earnings_module
 
-
     class EarningsCalendar:
         """Wrapper for function-based earnings"""
-
         def __init__(self, settings, logger):
             self.settings = settings
             self.logger = logger
@@ -96,7 +90,6 @@ from .universe import load_universe
 # Import enhanced modules (these will be created separately)
 try:
     from .risk_manager import RiskManager, Position as RiskPosition
-
     RISK_MANAGER_AVAILABLE = True
 except ImportError:
     RISK_MANAGER_AVAILABLE = False
@@ -104,7 +97,6 @@ except ImportError:
 
 try:
     from .strategy_manager import StrategyManager, MarketRegime
-
     STRATEGY_MANAGER_AVAILABLE = True
 except ImportError:
     STRATEGY_MANAGER_AVAILABLE = False
@@ -112,7 +104,6 @@ except ImportError:
 
 try:
     from .order_validator import OrderValidator
-
     ORDER_VALIDATOR_AVAILABLE = True
 except ImportError:
     ORDER_VALIDATOR_AVAILABLE = False
@@ -228,7 +219,7 @@ class Trader:
         # Start Position Monitor
         settings_dict = self.settings.as_dict() if hasattr(self.settings, 'as_dict') else {}
         monitor_enabled = settings_dict.get('risk', {}).get('position_monitor_enabled', True)
-
+        
         if monitor_enabled:
             try:
                 self.position_monitor.start()
@@ -302,16 +293,15 @@ class Trader:
                 if qty == 0:
                     continue
 
-                # Use risk manager if available
-                if self.risk_manager:
-                    risk_pos = self._convert_positions([position])[0]
-                    should_exit, reason = self.risk_manager.should_exit_position(risk_pos)
-
-                    if should_exit:
-                        self.logger.info(f"Exit signal for {symbol}: {reason}")
-                        # Place exit order
-                        # Note: position monitor handles stop losses automatically
-                        # This is for other exit signals (profit taking, etc.)
+                # Note: Position monitor handles stop losses automatically
+                # This check_exits method can be used for other exit signals
+                # (profit taking, time-based exits, etc.) if needed
+                
+                # Example: Check for profit targets
+                # unrealized_plpc = float(position.get('unrealized_plpc', 0))
+                # if unrealized_plpc > 0.02:  # 2% profit
+                #     self.logger.info(f"Profit target hit for {symbol}")
+                #     # Place exit order
 
         except Exception as e:
             self.logger.error(f"Error checking exits: {e}", exc_info=True)
@@ -343,7 +333,8 @@ class Trader:
                 equity = float(account.get('equity', 0))
                 metrics = self.risk_manager.calculate_risk_metrics(risk_positions, equity)
 
-                if metrics.has_violations():
+                # Check if there are any risk violations
+                if metrics.violations:
                     self.logger.warning(f"Risk violations present: {metrics.violations}")
                     return
 
@@ -406,8 +397,8 @@ class Trader:
                             'snapshot': snap
                         })
 
-            # Sort by score
-            self.candidates.sort(key=lambda x: x.get('score', 0), reverse=True)
+            # Sort by score (CombinedSignal has final_score attribute)
+            self.candidates.sort(key=lambda x: x.final_score if hasattr(x, 'final_score') else x.get('score', 0), reverse=True)
 
             self.last_candidate_refresh = datetime.now()
             self.logger.info(f"Found {len(self.candidates)} candidates")
@@ -438,8 +429,7 @@ class Trader:
                 except TypeError:
                     # Need additional parameters
                     window_hours = self.settings.get('news', {}).get('window_hours', 6)
-                    provider_order = self.settings.get('news', {}).get('provider_order',
-                                                                       ['alpaca', 'finnhub', 'newsapi'])
+                    provider_order = self.settings.get('news', {}).get('provider_order', ['alpaca', 'finnhub', 'newsapi'])
                     self.news_counts = self.news_manager._news_module.get_news_counts(
                         symbols_to_check,
                         window_hours=window_hours,
@@ -569,9 +559,9 @@ class Trader:
 
     def run(self):
         """Main trading loop"""
-        self.logger.info("=" * 60)
+        self.logger.info("="*60)
         self.logger.info("STARTING ENHANCED TRADING ENGINE")
-        self.logger.info("=" * 60)
+        self.logger.info("="*60)
 
         try:
             self.initialize()
@@ -660,6 +650,6 @@ class Trader:
                     self.logger.info("Position monitor stopped")
                 except Exception as e:
                     self.logger.error(f"Error stopping position monitor: {e}")
-
+            
             self.running = False
             self.logger.info("Engine stopped")
