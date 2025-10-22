@@ -1,6 +1,8 @@
 """
 Enhanced Trading Engine - Complete Version with Position Monitor
 Drop-in replacement for existing engine.py with full risk management
+
+FIXED: Candidates are now properly saved to database with correct serialization
 """
 import logging
 import time
@@ -108,6 +110,49 @@ try:
 except ImportError:
     ORDER_VALIDATOR_AVAILABLE = False
     logging.warning("Order validator not available - skipping validation")
+
+
+def serialize_candidate(candidate):
+    """
+    Convert a candidate (CombinedSignal dataclass or dict) to JSON-serializable dict
+
+    Args:
+        candidate: CombinedSignal dataclass or dict
+
+    Returns:
+        JSON-serializable dictionary
+    """
+    if hasattr(candidate, '__dataclass_fields__'):
+        # It's a CombinedSignal dataclass - convert to dict
+        return {
+            'symbol': candidate.symbol,
+            'final_score': candidate.final_score,
+            'confidence': candidate.confidence,
+            'active_strategies': candidate.active_strategies,
+            'regime': candidate.regime.value if hasattr(candidate.regime, 'value') else str(candidate.regime),
+            'is_crypto': getattr(candidate, 'is_crypto', False),
+            'signals': [
+                {
+                    'strategy_name': s.strategy_name,
+                    'score': s.score,
+                    'confidence': s.confidence,
+                    'regime_match': s.regime_match,
+                    'details': s.details
+                }
+                for s in candidate.signals
+            ],
+            'metadata': candidate.metadata
+        }
+    elif isinstance(candidate, dict):
+        # Already a dict - return as-is
+        return candidate
+    else:
+        # Unknown type - create minimal dict
+        return {
+            'symbol': str(candidate),
+            'final_score': getattr(candidate, 'final_score', 0),
+            'error': 'unknown_type'
+        }
 
 
 class Trader:
@@ -219,7 +264,7 @@ class Trader:
         # Start Position Monitor
         settings_dict = self.settings.as_dict() if hasattr(self.settings, 'as_dict') else {}
         monitor_enabled = settings_dict.get('risk', {}).get('position_monitor_enabled', True)
-        
+
         if monitor_enabled:
             try:
                 self.position_monitor.start()
@@ -296,7 +341,7 @@ class Trader:
                 # Note: Position monitor handles stop losses automatically
                 # This check_exits method can be used for other exit signals
                 # (profit taking, time-based exits, etc.) if needed
-                
+
                 # Example: Check for profit targets
                 # unrealized_plpc = float(position.get('unrealized_plpc', 0))
                 # if unrealized_plpc > 0.02:  # 2% profit
@@ -402,6 +447,19 @@ class Trader:
 
             self.last_candidate_refresh = datetime.now()
             self.logger.info(f"Found {len(self.candidates)} candidates")
+
+            # ✅ FIX: Save candidates to database for UI access
+            try:
+                from .state import set_candidates
+
+                # Convert CombinedSignal dataclasses to dicts for JSON serialization
+                serializable_candidates = [serialize_candidate(c) for c in self.candidates]
+
+                set_candidates(serializable_candidates)
+                self.logger.info(f"✓ Saved {len(serializable_candidates)} candidates to database")
+
+            except Exception as save_error:
+                self.logger.error(f"Failed to save candidates to database: {save_error}", exc_info=True)
 
         except Exception as e:
             self.logger.error(f"Error refreshing candidates: {e}", exc_info=True)
@@ -650,6 +708,6 @@ class Trader:
                     self.logger.info("Position monitor stopped")
                 except Exception as e:
                     self.logger.error(f"Error stopping position monitor: {e}")
-            
+
             self.running = False
             self.logger.info("Engine stopped")
