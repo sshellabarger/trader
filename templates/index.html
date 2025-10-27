@@ -226,37 +226,62 @@
             border-collapse: collapse;
         }
 
-        th {
-            text-align: left;
-            padding: 12px;
-            font-size: 13px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 2px solid var(--border);
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
         }
 
-        td {
+        .data-table thead {
+            background: rgba(59, 130, 246, 0.1);
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .data-table th,
+        .data-table td {
             padding: 12px;
+            text-align: left;
             border-bottom: 1px solid var(--border);
         }
 
-        tr:hover {
+        .data-table th {
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .data-table tbody tr:hover {
             background: var(--bg-hover);
         }
 
         .badge {
-            display: inline-block;
-            padding: 4px 10px;
-            border-radius: 12px;
+            padding: 4px 12px;
+            border-radius: 6px;
             font-size: 12px;
             font-weight: 600;
         }
 
-        .badge-success { background: rgba(16, 185, 129, 0.15); color: var(--success); }
-        .badge-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
-        .badge-warning { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
-        .badge-info { background: rgba(6, 182, 212, 0.15); color: var(--info); }
+        .badge-success { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+        .badge-danger { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
+        .badge-warning { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
+        .badge-info { background: rgba(6, 182, 212, 0.1); color: var(--info); }
+
+        .positive { color: var(--success); }
+        .negative { color: var(--danger); }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state div {
+            margin-bottom: 10px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
 
         .settings-grid {
             display: grid;
@@ -265,166 +290,129 @@
         }
 
         .setting-group {
-            background: rgba(255, 255, 255, 0.02);
-            padding: 20px;
+            background: rgba(59, 130, 246, 0.05);
+            border: 1px solid rgba(59, 130, 246, 0.2);
             border-radius: 8px;
-            border: 1px solid var(--border);
+            padding: 20px;
         }
 
         .setting-group h3 {
-            font-size: 16px;
             margin-bottom: 15px;
+            font-size: 16px;
             color: var(--accent);
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
         }
 
         .setting-item {
             margin-bottom: 15px;
         }
 
+        .setting-item:last-child {
+            margin-bottom: 0;
+        }
+
         .setting-item label {
             display: block;
-            font-size: 13px;
+            font-size: 14px;
             color: var(--text-secondary);
             margin-bottom: 5px;
         }
 
-        .setting-item small {
-            display: block;
-            margin-top: 4px;
-            font-size: 11px;
-        }
-
-        .setting-item input,
-        .setting-item select {
+        .setting-item input[type="text"],
+        .setting-item input[type="number"] {
             width: 100%;
             padding: 8px 12px;
-            background: var(--bg-dark);
+            background: var(--bg-card);
             border: 1px solid var(--border);
             border-radius: 6px;
             color: var(--text-primary);
             font-size: 14px;
         }
 
-        .setting-item input:focus,
-        .setting-item select:focus {
+        .setting-item input[type="text"]:focus,
+        .setting-item input[type="number"]:focus {
             outline: none;
             border-color: var(--accent);
         }
 
-        .toggle {
+        .setting-item .toggle {
             display: flex;
             align-items: center;
             gap: 10px;
-        }
-
-        .toggle input[type="checkbox"] {
-            width: 50px;
-            height: 26px;
-            appearance: none;
-            background: var(--border);
-            border-radius: 13px;
-            position: relative;
             cursor: pointer;
-            transition: background 0.3s;
         }
 
-        .toggle input[type="checkbox"]:checked {
-            background: var(--success);
+        .setting-item input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
         }
 
-        .toggle input[type="checkbox"]::before {
-            content: '';
-            position: absolute;
-            width: 22px;
-            height: 22px;
-            border-radius: 50%;
-            background: white;
-            top: 2px;
-            left: 2px;
-            transition: transform 0.3s;
-        }
-
-        .toggle input[type="checkbox"]:checked::before {
-            transform: translateX(24px);
+        .setting-item small {
+            display: block;
+            margin-top: 5px;
+            font-size: 12px;
         }
 
         .log-entry {
-            padding: 10px;
-            margin-bottom: 8px;
-            border-left: 3px solid var(--border);
-            background: rgba(255, 255, 255, 0.02);
-            border-radius: 4px;
-            font-size: 13px;
-            font-family: 'Courier New', monospace;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
         }
 
-        .log-entry.info { border-left-color: var(--info); }
-        .log-entry.warning { border-left-color: var(--warning); }
-        .log-entry.error { border-left-color: var(--danger); }
-        .log-entry.success { border-left-color: var(--success); }
+        .log-entry.error,
+        .log-entry.stopped {
+            border-left: 4px solid var(--danger);
+        }
+
+        .log-entry.warning,
+        .log-entry.high,
+        .log-entry.critical {
+            border-left: 4px solid var(--warning);
+        }
+
+        .log-entry.ok,
+        .log-entry.success {
+            border-left: 4px solid var(--success);
+        }
 
         .log-time {
             color: var(--text-secondary);
+            font-size: 12px;
             margin-right: 10px;
         }
 
-        .empty-state {
-            text-align: center;
-            padding: 40px;
-            color: var(--text-secondary);
-        }
-
-        .empty-state svg {
-            width: 64px;
-            height: 64px;
-            margin-bottom: 15px;
-            opacity: 0.3;
-        }
-
-        .refresh-timer {
-            font-size: 13px;
-            color: var(--text-secondary);
-        }
-
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        @media (max-width: 768px) {
-            .grid-2 {
-                grid-template-columns: 1fr;
-            }
-
-            .header-content {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-        }
-
         .score-bar {
-            width: 100px;
+            width: 100%;
             height: 6px;
             background: var(--border);
             border-radius: 3px;
             overflow: hidden;
+            margin-top: 5px;
         }
 
         .score-fill {
             height: 100%;
-            background: linear-gradient(90deg, var(--danger), var(--warning), var(--success));
+            background: linear-gradient(to right, var(--danger), var(--warning), var(--success));
             transition: width 0.3s;
         }
 
-        .loading {
+        .refresh-timer {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        .spinner {
             display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,0.3);
-            border-radius: 50%;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--text-secondary);
             border-top-color: var(--accent);
-            animation: spin 1s linear infinite;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
         }
 
         @keyframes spin {
@@ -549,30 +537,25 @@
         function startAutoRefresh() {
             refreshInterval = setInterval(() => {
                 countdown--;
-                document.getElementById('refreshTimer').textContent = `Auto-refresh: ${countdown}s`;
-
                 if (countdown <= 0) {
-                    refreshAll();
                     countdown = 20;
+                    refreshAll();
                 }
+                document.getElementById('refreshTimer').textContent = `Auto-refresh: ${countdown}s`;
             }, 1000);
         }
 
         async function refreshAll() {
-            document.getElementById('refreshBtn').innerHTML = '<span class="loading"></span>';
+            document.getElementById('refreshBtn').innerHTML = '<span class="spinner"></span> Refreshing...';
 
-            try {
-                await Promise.all([
-                    loadAccount(),
-                    loadPositions(),
-                    loadCandidates(),
-                    loadSettings(),
-                    loadHealth(),
-                    loadEvents()
-                ]);
-            } catch (error) {
-                console.error('Refresh error:', error);
-            }
+            await Promise.all([
+                loadAccount(),
+                loadPositions(),
+                loadCandidates(),
+                loadSettings(),
+                loadHealth(),
+                loadEvents()
+            ]);
 
             document.getElementById('refreshBtn').textContent = '🔄 Refresh Now';
             countdown = 20;
@@ -580,48 +563,57 @@
 
         async function loadAccount() {
             try {
-                const health = await fetch('/api/health').then(r => r.json());
+                const data = await fetch('/api/health').then(r => r.json());
+                console.log('Health API response:', data);
 
-                // Parse health data if it's double-encoded JSON
-                let parsedHealth = health;
-                if (health.system && typeof health.system === 'string') {
+                // The engine stores all data under 'system' as a JSON string
+                let systemData = data.system || data;
+                
+                // If system is a string, parse it
+                if (typeof systemData === 'string') {
                     try {
-                        parsedHealth = { system: JSON.parse(health.system) };
+                        systemData = JSON.parse(systemData);
+                        console.log('Parsed system data:', systemData);
                     } catch (e) {
-                        // Keep original
+                        console.error('Failed to parse system data:', e);
                     }
                 }
 
-                // Extract account and clock from nested structure
-                let account = {};
-                let clock = {};
-
-                if (parsedHealth.system?.status) {
+                // If systemData has a 'status' property that's a string, parse that too
+                if (systemData.status && typeof systemData.status === 'string') {
                     try {
-                        const systemData = typeof parsedHealth.system.status === 'string'
-                            ? JSON.parse(parsedHealth.system.status)
-                            : parsedHealth.system;
-                        account = systemData.account || {};
-                        clock = systemData.clock || {};
+                        systemData = JSON.parse(systemData.status);
+                        console.log('Parsed nested system data:', systemData);
                     } catch (e) {
-                        account = parsedHealth.account || health.account || {};
-                        clock = parsedHealth.clock || health.clock || {};
+                        // Keep original if parse fails
                     }
-                } else {
-                    account = parsedHealth.account || health.account || {};
-                    clock = parsedHealth.clock || health.clock || {};
                 }
 
-                // Update account display
-                const equity = account.equity || 0;
+                // Now extract account data from the parsed system object
+                let account = systemData.account || {};
+                console.log('Account data:', account);
+
+                // Extract clock data
+                let clock = systemData.clock || {};
+                console.log('Clock data:', clock);
+
+                // Update account summary
+                const equity = parseFloat(account.equity || 0);
+                const buyingPower = parseFloat(account.buying_power || 0);
+                const cash = parseFloat(account.cash || 0);
+
+                console.log('Parsed values:', { equity, buyingPower, cash });
+
                 document.getElementById('equity').textContent = formatCurrency(equity);
-                document.getElementById('buyingPower').textContent = formatCurrency(account.buying_power || 0);
+                document.getElementById('buyingPower').textContent = formatCurrency(buyingPower);
 
                 // Market status
                 const marketStatus = document.getElementById('marketStatus');
                 const isOpen = clock.is_open || false;
                 marketStatus.className = `market-status ${isOpen ? 'open' : 'closed'}`;
                 document.getElementById('marketStatusText').textContent = isOpen ? 'Market Open' : 'Market Closed';
+                
+                console.log('Account loaded successfully');
             } catch (error) {
                 console.error('Load account error:', error);
             }
@@ -713,9 +705,26 @@
                 `;
 
                 // Update summary stats
-                const account = await fetch('/api/account').then(r => r.json()).catch(() => null);
-                if (account) {
-                    const equity = parseFloat(account.equity || 0);
+                const healthData = await fetch('/api/health').then(r => r.json()).catch(() => null);
+                if (healthData) {
+                    // Parse system data
+                    let systemData = healthData.system || healthData;
+                    if (typeof systemData === 'string') {
+                        try {
+                            systemData = JSON.parse(systemData);
+                        } catch (e) {}
+                    }
+                    
+                    // If nested, parse again
+                    if (systemData.status && typeof systemData.status === 'string') {
+                        try {
+                            systemData = JSON.parse(systemData.status);
+                        } catch (e) {}
+                    }
+
+                    let accountData = systemData.account || {};
+
+                    const equity = parseFloat(accountData.equity || 0);
                     const exposurePct = equity > 0 ? (totalValue / equity * 100).toFixed(1) : 0;
                     const dailyPLPct = equity > 0 ? (totalPL / equity * 100).toFixed(2) : 0;
 
@@ -744,19 +753,24 @@
             }
         }
 
-        // Helper function for currency formatting
-        function formatCurrency(value) {
-            const num = parseFloat(value || 0);
-            return '$' + num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-        }
-
         async function loadCandidates() {
             try {
                 const data = await fetch('/api/candidates').then(r => r.json());
                 let candidates = data.candidates || [];
 
-                // Handle different data formats
+                // Parse if needed
+                if (typeof candidates === 'string') {
+                    try {
+                        candidates = JSON.parse(candidates);
+                    } catch (e) {
+                        console.error('Failed to parse candidates:', e);
+                        candidates = [];
+                    }
+                }
+
+                // Ensure it's an array
                 if (!Array.isArray(candidates)) {
+                    console.warn('Candidates is not an array:', typeof candidates);
                     candidates = [];
                 }
 
@@ -766,9 +780,9 @@
                     document.getElementById('candidatesTable').innerHTML = `
                         <div class="empty-state">
                             <div style="font-size: 48px;">🎯</div>
-                            <div>No candidates meet entry criteria</div>
-                            <div style="margin-top: 10px; font-size: 13px;">
-                                Try lowering the entry threshold in Settings
+                            <div>No candidates found</div>
+                            <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
+                                Waiting for market signals...
                             </div>
                         </div>
                     `;
@@ -777,45 +791,54 @@
 
                 const rows = candidates.slice(0, 20).map(candidate => {
                     const score = candidate.final_score || candidate.score || 0;
-                    const symbol = candidate.symbol || candidate.Symbol || 'N/A';
-                    const price = candidate.metadata?.current_price || candidate.price || 0;
-                    const regime = candidate.regime?.value || candidate.regime || 'unknown';
+                    const confidence = candidate.confidence || 0;
+                    const symbol = candidate.symbol || 'N/A';
                     const strategies = candidate.active_strategies || [];
+                    const regime = candidate.regime || 'unknown';
 
                     return `
                         <tr>
                             <td><strong>${symbol}</strong></td>
-                            <td>${formatCurrency(price)}</td>
                             <td>
-                                <div class="score-bar">
-                                    <div class="score-fill" style="width: ${score * 100}%"></div>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span>${(score * 100).toFixed(1)}%</span>
+                                    <div class="score-bar" style="flex: 1;">
+                                        <div class="score-fill" style="width: ${score * 100}%"></div>
+                                    </div>
                                 </div>
-                                <div style="font-size: 12px; margin-top: 4px;">${score.toFixed(3)}</div>
                             </td>
+                            <td>${(confidence * 100).toFixed(0)}%</td>
                             <td><span class="badge badge-info">${regime}</span></td>
-                            <td style="font-size: 12px;">
-                                ${strategies.slice(0, 3).map(s => `<span class="badge badge-success">${s}</span>`).join(' ')}
-                            </td>
+                            <td style="font-size: 12px;">${strategies.join(', ')}</td>
                         </tr>
                     `;
                 }).join('');
 
                 document.getElementById('candidatesTable').innerHTML = `
-                    <table>
+                    <table class="data-table">
                         <thead>
                             <tr>
                                 <th>Symbol</th>
-                                <th>Price</th>
                                 <th>Score</th>
+                                <th>Confidence</th>
                                 <th>Regime</th>
-                                <th>Active Strategies</th>
+                                <th>Strategies</th>
                             </tr>
                         </thead>
-                        <tbody>${rows}</tbody>
+                        <tbody>
+                            ${rows}
+                        </tbody>
                     </table>
                 `;
+
             } catch (error) {
                 console.error('Load candidates error:', error);
+                document.getElementById('candidatesTable').innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px;">⚠️</div>
+                        <div>Error loading candidates</div>
+                    </div>
+                `;
             }
         }
 
@@ -823,9 +846,7 @@
             try {
                 const settings = await fetch('/api/settings').then(r => r.json());
 
-                console.log('Loaded settings:', settings); // Debug output
-
-                 const settingsHTML = `
+                const settingsHTML = `
                     <div class="setting-group">
                         <h3>🎯 Trading Thresholds</h3>
                         <div class="setting-item">
@@ -990,6 +1011,12 @@
         async function loadHealth() {
             try {
                 const health = await fetch('/api/health').then(r => r.json());
+                console.log('Health data:', health);
+
+                if (!health || Object.keys(health).length === 0) {
+                    document.getElementById('healthStatus').innerHTML = '<div class="empty-state">No health data available</div>';
+                    return;
+                }
 
                 let healthItems = [];
 
@@ -1004,92 +1031,212 @@
                         try {
                             parsedValue = JSON.parse(value);
                         } catch (e) {
-                            // Keep as string if not JSON
+                            parsedValue = { status: value };
                         }
                     }
 
-                    // Handle nested status object
-                    if (typeof parsedValue === 'object' && parsedValue !== null) {
-                        // Check if it has a 'status' field that's also JSON
-                        if (parsedValue.status && typeof parsedValue.status === 'string') {
-                            try {
-                                const nestedData = JSON.parse(parsedValue.status);
-                                parsedValue = nestedData;
-                            } catch (e) {
-                                // Keep original if not JSON
+                    // Ensure we have an object
+                    if (typeof parsedValue !== 'object' || parsedValue === null) {
+                        parsedValue = { status: String(parsedValue) };
+                    }
+
+                    // Handle nested status object (double-encoded JSON)
+                    if (parsedValue.status && typeof parsedValue.status === 'string') {
+                        try {
+                            const nestedData = JSON.parse(parsedValue.status);
+                            if (typeof nestedData === 'object') {
+                                parsedValue = { ...parsedValue, ...nestedData };
                             }
+                        } catch (e) {
+                            // Keep original if not JSON
                         }
+                    }
 
-                        const status = (parsedValue.status || 'OK').toLowerCase();
-                        const statusBadge = status === 'error' ? 'danger' :
-                                          status === 'high' || status === 'critical' ? 'warning' :
-                                          status === 'ok' ? 'success' : 'info';
+                    const status = (parsedValue.status || 'OK').toString().toUpperCase();
+                    const statusBadge = 
+                        status === 'ERROR' || status === 'CRITICAL' ? 'danger' :
+                        status === 'HIGH' || status === 'WARNING' || status === 'STOPPED' ? 'warning' :
+                        status === 'OK' || status === 'SUCCESS' ? 'success' : 'info';
 
-                        let details = '';
-                        Object.entries(parsedValue).forEach(([k, v]) => {
-                            if (k !== 'status' && v !== null && v !== undefined) {
-                                if (k === 'violations' && Array.isArray(v)) {
-                                    details += `<div style="margin-top: 5px;">⚠️ ${v.join(', ')}</div>`;
-                                } else if (typeof v === 'object') {
-                                    details += `<div style="margin-top: 5px;"><strong>${k}:</strong> ${JSON.stringify(v)}</div>`;
-                                } else {
-                                    details += `<div style="margin-top: 5px;"><strong>${k}:</strong> ${v}</div>`;
+                    // Build details section
+                    let details = '';
+                    Object.entries(parsedValue).forEach(([k, v]) => {
+                        if (k === 'status') return; // Skip status, shown in badge
+                        if (v === null || v === undefined) return;
+
+                        const label = k.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                        
+                        if (k === 'violations' && Array.isArray(v) && v.length > 0) {
+                            details += `<div style="margin-top: 8px; padding: 8px; background: rgba(239, 68, 68, 0.1); border-radius: 6px;">`;
+                            details += `<strong>⚠️ Violations:</strong><br/>`;
+                            v.forEach(violation => {
+                                details += `<div style="margin-left: 16px; margin-top: 4px;">• ${violation}</div>`;
+                            });
+                            details += `</div>`;
+                        } else if (typeof v === 'boolean') {
+                            const icon = v ? '✓' : '✗';
+                            const color = v ? 'var(--success)' : 'var(--danger)';
+                            details += `<div style="margin-top: 5px;"><strong>${label}:</strong> <span style="color: ${color}">${icon} ${v ? 'Yes' : 'No'}</span></div>`;
+                        } else if (typeof v === 'number') {
+                            let formatted;
+                            if (k.includes('pct') || k.includes('percent')) {
+                                formatted = `${v.toFixed(2)}%`;
+                            } else if (k.includes('equity') || k.includes('cash') || k.includes('power')) {
+                                formatted = formatCurrency(v);
+                            } else if (k.includes('count')) {
+                                formatted = v.toString();
+                            } else {
+                                formatted = v.toLocaleString();
+                            }
+                            details += `<div style="margin-top: 5px;"><strong>${label}:</strong> ${formatted}</div>`;
+                        } else if (typeof v === 'object' && !Array.isArray(v)) {
+                            details += `<div style="margin-top: 10px; padding-left: 12px; border-left: 3px solid var(--border);"><strong>${label}:</strong></div>`;
+                            Object.entries(v).forEach(([subK, subV]) => {
+                                const subLabel = subK.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                                let subFormatted = subV;
+                                if (typeof subV === 'number') {
+                                    if (subK.includes('pct')) subFormatted = `${subV.toFixed(2)}%`;
+                                    else if (subK.includes('price') || subK.includes('value')) subFormatted = formatCurrency(subV);
                                 }
-                            }
-                        });
+                                details += `<div style="margin-left: 20px; margin-top: 4px; color: var(--text-secondary); font-size: 14px;">${subLabel}: ${subFormatted}</div>`;
+                            });
+                        } else if (Array.isArray(v) && v.length > 0) {
+                            details += `<div style="margin-top: 5px;"><strong>${label}:</strong> [${v.join(', ')}]</div>`;
+                        } else if (v.toString().trim()) {
+                            details += `<div style="margin-top: 5px;"><strong>${label}:</strong> ${v}</div>`;
+                        }
+                    });
 
-                        healthItems.push(`
-                            <div class="log-entry ${status}">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <strong style="text-transform: capitalize;">${key}</strong>
-                                    <span class="badge badge-${statusBadge}">${parsedValue.status || 'OK'}</span>
-                                </div>
-                                ${details}
+                    // Create health card
+                    const componentName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    healthItems.push(`
+                        <div class="log-entry">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                <strong style="font-size: 16px; color: var(--text-primary);">${componentName}</strong>
+                                <span class="badge badge-${statusBadge}" style="font-size: 13px;">${status}</span>
                             </div>
-                        `);
-                    } else {
-                        healthItems.push(`
-                            <div class="log-entry">
-                                <strong>${key}:</strong> ${parsedValue}
-                            </div>
-                        `);
-                    }
+                            ${details || '<div style="color: var(--text-secondary); font-style: italic; font-size: 14px;">No additional details</div>'}
+                        </div>
+                    `);
                 });
 
-                document.getElementById('healthStatus').innerHTML = healthItems.join('') || '<div class="empty-state">No health data</div>';
+                document.getElementById('healthStatus').innerHTML = healthItems.length > 0 ? 
+                    healthItems.join('') : 
+                    '<div class="empty-state">No health components found</div>';
+                    
             } catch (error) {
                 console.error('Load health error:', error);
-                document.getElementById('healthStatus').innerHTML = '<div class="empty-state">Failed to load health data</div>';
+                document.getElementById('healthStatus').innerHTML = `
+                    <div class="empty-state">
+                        <div>❌ Failed to load health data</div>
+                        <div style="font-size: 13px; color: var(--text-secondary); margin-top: 8px;">${error.message}</div>
+                    </div>`;
             }
         }
 
         async function loadEvents() {
             try {
-                const data = await fetch('/api/status').then(r => r.json());
+                console.log('Fetching events from /api/status...');
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                console.log('Events response:', data);
+                
                 const events = data.events || [];
+                console.log(`Found ${events.length} events`);
 
                 if (events.length === 0) {
-                    document.getElementById('eventsLog').innerHTML = '<div class="empty-state">No recent events</div>';
+                    document.getElementById('eventsLog').innerHTML = `
+                        <div class="empty-state">
+                            <div>📋 No events logged yet</div>
+                            <div style="font-size: 13px; color: var(--text-secondary); margin-top: 8px;">
+                                Events will appear here when the trading bot performs actions
+                            </div>
+                        </div>`;
                     return;
                 }
 
-                const eventsHTML = events.slice(0, 50).map(event => {
-                    const timestamp = new Date(event.timestamp || event.ts).toLocaleString();
-                    const type = event.event_type || 'info';
-                    const message = event.message || '';
+                const eventsHTML = events.slice(0, 100).map((event, index) => {
+                    // Handle different timestamp field names
+                    const timestamp = event.timestamp || event.ts || event.time || '';
+                    const type = (event.event_type || event.type || 'info').toLowerCase();
+                    const message = event.message || event.msg || event.text || 'No message';
+                    const details = event.details || event.detail || '';
+                    
+                    // Format timestamp
+                    let formattedTime = 'Unknown time';
+                    if (timestamp) {
+                        try {
+                            formattedTime = new Date(timestamp).toLocaleString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit'
+                            });
+                        } catch (e) {
+                            formattedTime = timestamp;
+                        }
+                    }
+
+                    // Determine type badge style
+                    let typeBadge, typeIcon;
+                    switch(type) {
+                        case 'error':
+                        case 'critical':
+                            typeBadge = 'danger';
+                            typeIcon = '❌';
+                            break;
+                        case 'warning':
+                        case 'warn':
+                            typeBadge = 'warning';
+                            typeIcon = '⚠️';
+                            break;
+                        case 'success':
+                            typeBadge = 'success';
+                            typeIcon = '✓';
+                            break;
+                        case 'trade':
+                        case 'order':
+                            typeBadge = 'info';
+                            typeIcon = '💰';
+                            break;
+                        default:
+                            typeBadge = 'info';
+                            typeIcon = 'ℹ️';
+                    }
 
                     return `
-                        <div class="log-entry ${type}">
-                            <span class="log-time">${timestamp}</span>
-                            <strong>${type.toUpperCase()}:</strong> ${message}
+                        <div class="log-entry" style="border-left: 3px solid var(--${typeBadge === 'danger' ? 'danger' : typeBadge === 'warning' ? 'warning' : typeBadge === 'success' ? 'success' : 'info'});">
+                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 6px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 16px;">${typeIcon}</span>
+                                    <span class="badge badge-${typeBadge}" style="font-size: 11px; text-transform: uppercase;">${type}</span>
+                                </div>
+                                <span class="log-time" style="font-size: 12px; color: var(--text-secondary);">${formattedTime}</span>
+                            </div>
+                            <div style="margin-top: 6px; color: var(--text-primary); font-size: 14px;">
+                                ${message}
+                            </div>
+                            ${details ? `<div style="margin-top: 6px; padding: 8px; background: rgba(255,255,255,0.03); border-radius: 4px; font-size: 13px; color: var(--text-secondary); font-family: monospace;">${details}</div>` : ''}
                         </div>
                     `;
                 }).join('');
 
                 document.getElementById('eventsLog').innerHTML = eventsHTML;
+                console.log('Events rendered successfully');
+                
             } catch (error) {
                 console.error('Load events error:', error);
-                document.getElementById('eventsLog').innerHTML = '<div class="empty-state">Failed to load events</div>';
+                document.getElementById('eventsLog').innerHTML = `
+                    <div class="empty-state">
+                        <div>❌ Failed to load events</div>
+                        <div style="font-size: 13px; color: var(--text-secondary); margin-top: 8px;">
+                            ${error.message}
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="loadEvents()" style="margin-top: 12px;">
+                            🔄 Retry
+                        </button>
+                    </div>`;
             }
         }
 
@@ -1113,14 +1260,18 @@
                     trailing_stop_pct: parseFloat(document.getElementById('setting-trailing-stop').value),
                     max_hold_time_minutes: parseInt(document.getElementById('setting-max-hold-time').value),
                     trailing_stop_enabled: document.getElementById('setting-trailing-enabled').checked,
-                    close_all_eod: document.getElementById('setting-close-eod').checked
+                    close_all_eod: document.getElementById('setting-close-eod').checked,
+                    position_monitor_enabled: document.getElementById('setting-position-monitor-enabled').checked,
+                    position_monitor_interval_sec: parseInt(document.getElementById('setting-position-monitor-interval').value)
                 },
                 strategies: {
                     momentum: document.getElementById('setting-momentum').checked,
                     mean_reversion: document.getElementById('setting-mean-reversion').checked,
                     news: document.getElementById('setting-news').checked,
                     earnings: document.getElementById('setting-earnings').checked,
-                    crypto: document.getElementById('setting-crypto').checked
+                    longterm_trend: document.getElementById('setting-longterm-trend').checked,
+                    longterm_momentum: document.getElementById('setting-longterm-momentum').checked,
+                    crypto: document.getElementById('setting-crypto-strategy').checked
                 },
                 crypto: {
                     enabled: document.getElementById('setting-crypto-enabled').checked,
@@ -1129,8 +1280,10 @@
                 scheduling: {
                     candidate_refresh_min: parseInt(document.getElementById('setting-candidate-refresh').value),
                     candidate_max_symbols: parseInt(document.getElementById('setting-max-symbols').value),
-                    news_interval_s: parseInt(document.getElementById('setting-news-interval').value),
                     health_refresh_min: parseInt(document.getElementById('setting-health-refresh').value)
+                },
+                news: {
+                    news_interval_s: parseInt(document.getElementById('setting-news-interval').value)
                 }
             };
 
@@ -1160,20 +1313,40 @@
             if (!confirm(`Close position in ${symbol}?`)) return;
 
             try {
-                // This would need a backend endpoint to close positions
-                alert(`Close position functionality needs backend implementation for ${symbol}`);
+                const response = await fetch(`/api/positions/${symbol}/close`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    alert(`✅ ${result.message}`);
+                    await loadPositions();
+                } else {
+                    alert(`❌ ${result.message}`);
+                }
             } catch (error) {
-                alert('Error closing position: ' + error.message);
+                alert('❌ Error closing position: ' + error.message);
             }
         }
 
         async function closeAllPositions() {
-            if (!confirm('Close ALL positions? This cannot be undone.')) return;
+            if (!confirm('⚠️ Close ALL positions? This cannot be undone.')) return;
 
             try {
-                alert('Close all positions functionality needs backend implementation');
+                const response = await fetch('/api/positions/close-all', {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    alert(`✅ ${result.message}\n\nClosed: ${result.closed.join(', ')}\n` + 
+                          (result.failed.length > 0 ? `Failed: ${result.failed.join(', ')}` : ''));
+                    await loadPositions();
+                } else {
+                    alert(`❌ ${result.message}`);
+                }
             } catch (error) {
-                alert('Error: ' + error.message);
+                alert('❌ Error: ' + error.message);
             }
         }
 

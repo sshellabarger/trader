@@ -1,21 +1,20 @@
 """
 Settings module with KV-backed configuration
-Maintains all your existing settings plus adds required functions
+✅ UPDATED: Optimized intervals and simulation mode support
 """
 import json
 import logging
 from typing import Dict, Any
 
-# Import state functions
 from .state import get_kv, set_kv
 
-# Default settings structure
+# ✅ OPTIMIZED: Adjusted for better rate limit management
 scheduling = {
-    "candidate_refresh_min": 20,
-    "candidate_max_symbols": 150,
-    "news_interval_s": 1200,
-    "earnings_refresh_min": 60,
-    "health_refresh_min": 20
+    "candidate_refresh_min": 30,  # Increased from 20 to avoid rate limits
+    "candidate_max_symbols": 100,  # Reduced from 150 to avoid rate limits
+    "news_interval_s": 1800,  # 30 minutes instead of 20
+    "earnings_refresh_min": 120,  # Only refresh twice per day
+    "health_refresh_min": 15  # Reduced from 20 for better monitoring
 }
 
 strategies = {
@@ -25,7 +24,7 @@ strategies = {
     "earnings": True,
     "longterm_trend": True,
     "longterm_momentum": True,
-    "crypto": True
+    "crypto": False  # Set to True to enable 24/7 crypto trading
 }
 
 thresholds = {
@@ -69,14 +68,16 @@ risk = {
     "close_all_eod": True,
     "max_daily_trades": 50,
     "min_trade_value": 100,
-    "position_monitor_interval_sec": 30,  # Check every 30 seconds
+    "position_monitor_interval_sec": 30,
     "position_monitor_enabled": True
 }
 
+# ✅ NEW: Added simulation mode flag
 backtest = {
     "initial_capital": 100000.0,
     "commission_per_trade": 1.0,
-    "slippage_bps": 2.0
+    "slippage_bps": 2.0,
+    "simulation_mode": False  # Set to True to log orders without executing
 }
 
 
@@ -85,7 +86,6 @@ def get_settings() -> Dict[str, Any]:
     Get current settings merged with KV overrides
     Returns all settings as a dictionary
     """
-    # Start with defaults
     settings = {
         'scheduling': scheduling.copy(),
         'strategies': strategies.copy(),
@@ -125,7 +125,6 @@ def update_settings(updates: Dict[str, Any]) -> Dict[str, str]:
         if not isinstance(updates, dict):
             return {'status': 'error', 'message': 'Updates must be a dictionary'}
 
-        # Store each category update
         for key, value in updates.items():
             if isinstance(value, dict):
                 set_kv(f'settings.{key}', json.dumps(value))
@@ -165,12 +164,10 @@ def get(category: str, key: str = None, default=None):
     return all_settings[category].get(key, default)
 
 
-# Backward compatibility - module-level access
 def _refresh_from_kv():
     """Refresh module-level dicts from KV store"""
     all_settings = get_settings()
 
-    # Update module-level variables
     scheduling.update(all_settings['scheduling'])
     strategies.update(all_settings['strategies'])
     thresholds.update(all_settings['thresholds'])
@@ -181,14 +178,12 @@ def _refresh_from_kv():
     backtest.update(all_settings['backtest'])
 
 
-# Initialize from KV on import
 try:
     _refresh_from_kv()
 except Exception as e:
     logging.warning(f"Failed to load settings from KV: {e}")
 
 
-# Settings class for engine compatibility
 class Settings:
     """Object-oriented settings interface"""
 
@@ -200,8 +195,8 @@ class Settings:
         Get setting category
 
         Args:
-            category: Setting category name (e.g., 'scheduling', 'thresholds')
-            default: Default value if not found (typically empty dict {})
+            category: Setting category name
+            default: Default value if not found
 
         Returns:
             Dictionary of settings for that category
