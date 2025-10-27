@@ -1,11 +1,17 @@
 """
 Complete Strategy Signals Module
-Includes all 8 signal types: momentum, mean_reversion, news, volume, 
+Includes all 8 signal types: momentum, mean_reversion, news, volume,
 earnings, longterm_trend, longterm_momentum, and crypto
 """
 from __future__ import annotations
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 import math
+
+# Import NewsArticle for type hints
+try:
+    from .news import NewsArticle
+except ImportError:
+    NewsArticle = None
 
 
 def _mover_from_snap(snap: dict) -> float:
@@ -84,24 +90,94 @@ def score_mean_reversion(current_price: float, open_price: float, prev_close: fl
     return score, details
 
 
-def score_news(symbol: str, news_counts: Dict[str, int], window_hours: int = 6) -> Tuple[float, Dict]:
+def score_news(symbol: str, news_data, window_hours: int = 6) -> Tuple[float, Dict]:
     """
-    Score based on news activity
-    More news articles = higher score (logarithmic)
+    Score based on news activity and sentiment analysis.
+
+    Args:
+        symbol: Stock symbol
+        news_data: Either a List[NewsArticle] or Dict[str, int] (for backward compatibility)
+        window_hours: Time window for news
+
+    Returns:
+        Tuple of (score, details dict)
+
+    Scoring approach:
+    - Each article contributes based on its sentiment (-1 to +1)
+    - Positive sentiment increases score, negative decreases it
+    - Multiple positive articles compound the effect
+    - Final score is normalized to 0-1 range
     """
     details = {}
-    
-    count = news_counts.get(symbol, 0)
-    details['news_count'] = count
     details['window_hours'] = window_hours
-    
-    if count > 0:
-        # Logarithmic scaling: 1 article = ~0.3, 5 articles = ~0.6, 20 articles = 1.0
-        score = min(1.0, math.log(count + 1) / math.log(20))
-    else:
-        score = 0
-    
-    details['score'] = score
+
+    # Backward compatibility: handle old dict format
+    if isinstance(news_data, dict):
+        count = news_data.get(symbol, 0)
+        details['news_count'] = count
+        details['legacy_mode'] = True
+
+        if count > 0:
+            # Logarithmic scaling: 1 article = ~0.3, 5 articles = ~0.6, 20 articles = 1.0
+            score = min(1.0, math.log(count + 1) / math.log(20))
+        else:
+            score = 0
+        details['score'] = score
+        return score, details
+
+    # New approach: use sentiment analysis
+    articles = [a for a in news_data if a.symbol == symbol] if news_data else []
+
+    if not articles:
+        details['news_count'] = 0
+        details['avg_sentiment'] = 0
+        details['score'] = 0
+        return 0, details
+
+    details['news_count'] = len(articles)
+
+    # Calculate weighted sentiment score
+    sentiment_scores = [a.sentiment_score for a in articles if a.sentiment_score is not None]
+
+    if not sentiment_scores:
+        # Fallback if no sentiment scores available
+        details['avg_sentiment'] = 0
+        score = min(1.0, math.log(len(articles) + 1) / math.log(20))
+        details['score'] = score
+        return score, details
+
+    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+    details['avg_sentiment'] = round(avg_sentiment, 3)
+
+    # Sentiment distribution for debugging
+    positive_count = sum(1 for s in sentiment_scores if s > 0.1)
+    negative_count = sum(1 for s in sentiment_scores if s < -0.1)
+    neutral_count = len(sentiment_scores) - positive_count - negative_count
+
+    details['positive_articles'] = positive_count
+    details['negative_articles'] = negative_count
+    details['neutral_articles'] = neutral_count
+
+    # Calculate score based on sentiment and volume
+    # 1. Start with article volume score (0-0.5 range)
+    volume_score = min(0.5, math.log(len(articles) + 1) / math.log(20) * 0.5)
+
+    # 2. Add sentiment component (0-0.5 range, can be negative)
+    # Positive sentiment adds to score, negative subtracts
+    sentiment_component = avg_sentiment * 0.5
+
+    # 3. Combine: volume shows activity, sentiment shows direction
+    raw_score = volume_score + sentiment_component
+
+    # 4. Normalize to 0-1 range
+    # Heavily positive news can push above 1.0, cap it
+    # Heavily negative news can go below 0, floor it
+    score = max(0.0, min(1.0, raw_score))
+
+    details['volume_score'] = round(volume_score, 3)
+    details['sentiment_component'] = round(sentiment_component, 3)
+    details['score'] = round(score, 3)
+
     return score, details
 
 

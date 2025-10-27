@@ -206,7 +206,7 @@ class Trader:
         self.stock_universe = []
         self.crypto_universe = []
         self.candidates = []
-        self.news_counts = {}
+        self.news_articles = []  # Changed from news_counts to news_articles
         self.earnings_data = {}
 
         self.last_candidate_refresh = None
@@ -632,7 +632,7 @@ class Trader:
             if self.strategy_manager:
                 self.candidates = self.strategy_manager.rank_candidates(
                     snapshots,
-                    self.news_counts,
+                    self.news_articles,  # Changed from news_counts to news_articles
                     self.earnings_data
                 )
             else:
@@ -669,7 +669,7 @@ class Trader:
             self.logger.error(f"Error refreshing candidates: {e}", exc_info=True)
 
     def refresh_news(self):
-        """Refresh news data"""
+        """Refresh news data with sentiment analysis"""
         interval_s = self.settings.get('news', {}).get('news_interval_s', 1800)
 
         if self.last_news_refresh:
@@ -677,33 +677,45 @@ class Trader:
             if elapsed < interval_s:
                 return
 
-        self.logger.info("Refreshing news...")
+        self.logger.info("Refreshing news with sentiment analysis...")
 
         try:
             symbols_to_check = self.universe[:60]
+            window_hours = self.settings.get('news', {}).get('window_hours', 6)
+            provider_order = self.settings.get('news', {}).get('provider_order', ['alpaca', 'finnhub', 'newsapi'])
 
-            if hasattr(self.news_manager, 'get_news_counts'):
-                try:
-                    self.news_counts = self.news_manager.get_news_counts(symbols_to_check)
-                except TypeError:
-                    window_hours = self.settings.get('news', {}).get('window_hours', 6)
-                    provider_order = self.settings.get('news', {}).get('provider_order', ['alpaca', 'finnhub', 'newsapi'])
-                    self.news_counts = self.news_manager._news_module.get_news_counts(
-                        symbols_to_check,
-                        window_hours=window_hours,
-                        provider_order=provider_order
-                    )
+            # Try to get news articles with sentiment
+            if hasattr(self.news_manager, '_news_module') and hasattr(self.news_manager._news_module, 'get_news_articles'):
+                self.news_articles = self.news_manager._news_module.get_news_articles(
+                    symbols_to_check,
+                    window_hours=window_hours,
+                    provider_order=provider_order
+                )
             else:
-                self.news_counts = {}
+                # Fallback to empty list if not available
+                self.news_articles = []
 
             self.last_news_refresh = datetime.now()
 
-            total_articles = sum(self.news_counts.values())
-            self.logger.info(f"Found {total_articles} articles across {len(self.news_counts)} symbols")
+            # Calculate statistics
+            total_articles = len(self.news_articles)
+            if total_articles > 0:
+                symbols_with_news = len(set(a.symbol for a in self.news_articles))
+                avg_sentiment = sum(a.sentiment_score or 0 for a in self.news_articles) / total_articles
+                positive_count = sum(1 for a in self.news_articles if (a.sentiment_score or 0) > 0.1)
+                negative_count = sum(1 for a in self.news_articles if (a.sentiment_score or 0) < -0.1)
+
+                self.logger.info(
+                    f"Found {total_articles} articles across {symbols_with_news} symbols. "
+                    f"Avg sentiment: {avg_sentiment:.3f}, "
+                    f"Positive: {positive_count}, Negative: {negative_count}"
+                )
+            else:
+                self.logger.info("No news articles found")
 
         except Exception as e:
             self.logger.error(f"Error refreshing news: {e}", exc_info=True)
-            self.news_counts = {}
+            self.news_articles = []
 
     def refresh_earnings(self):
         """Refresh earnings calendar"""

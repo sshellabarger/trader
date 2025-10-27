@@ -8,6 +8,9 @@ from typing import Dict, List, Optional, Tuple
 from enum import Enum
 import statistics
 
+# Import strategy scoring functions
+from . import strategies as strat
+
 
 class MarketRegime(Enum):
     """Market regime classification"""
@@ -219,22 +222,12 @@ class StrategyManager:
 
         return score, details
 
-    def score_news(self, symbol: str, news_counts: Dict[str, int], window_hours: int = 6) -> Tuple[float, Dict]:
-        """Score based on news activity"""
-        details = {}
-
-        count = news_counts.get(symbol, 0)
-        details['news_count'] = count
-        details['window_hours'] = window_hours
-
-        if count > 0:
-            import math
-            score = min(1.0, math.log(count + 1) / math.log(20))
-        else:
-            score = 0
-
-        details['score'] = score
-        return score, details
+    def score_news(self, symbol: str, news_data, window_hours: int = 6) -> Tuple[float, Dict]:
+        """
+        Score based on news activity and sentiment.
+        Delegates to strategies.score_news for actual scoring logic.
+        """
+        return strat.score_news(symbol, news_data, window_hours)
 
     def score_volume(self, current_volume: Optional[float], avg_volume: Optional[float]) -> Tuple[float, Dict]:
         """Score based on volume"""
@@ -385,8 +378,19 @@ class StrategyManager:
         crypto_patterns = ['/', 'USD', 'BTC', 'ETH', 'LTC', 'DOGE', 'ADA', 'SOL']
         return any(pattern in symbol for pattern in crypto_patterns)
 
-    def rank_candidates(self, snapshots: Dict, news_counts: Dict, earnings_calendar: Dict, min_score: float = 0.5) -> List[CombinedSignal]:
-        """Rank all candidates using combined signals"""
+    def rank_candidates(self, snapshots: Dict, news_data, earnings_calendar: Dict, min_score: float = 0.5) -> List[CombinedSignal]:
+        """
+        Rank all candidates using combined signals.
+
+        Args:
+            snapshots: Market data snapshots
+            news_data: Either List[NewsArticle] or Dict[str, int] for backward compatibility
+            earnings_calendar: Earnings data
+            min_score: Minimum score threshold
+
+        Returns:
+            List of ranked CombinedSignal objects
+        """
         candidates = []
 
         for symbol, snapshot in snapshots.items():
@@ -441,7 +445,7 @@ class StrategyManager:
 
                 # News signal
                 if self.strategies_enabled.get('news', True):
-                    score, details = self.score_news(symbol, news_counts)
+                    score, details = self.score_news(symbol, news_data)
                     signals.append(SignalResult(
                         strategy_name='news',
                         score=score,
