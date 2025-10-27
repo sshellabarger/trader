@@ -41,9 +41,10 @@ numpy>=2.1.2
 feedparser>=6.0.10
 aiofiles>=23.2.1
 pytest>=8.2.0
+textblob>=0.17.1
 ```
 
-(They’re already listed in `requirements.txt`.)
+(They're already listed in `requirements.txt`.)
 
 ---
 
@@ -57,7 +58,7 @@ pytest>=8.2.0
 │  ├─ broker_alpaca.py     # Alpaca account/positions, snapshots (stocks/crypto), orders
 │  ├─ settings.py          # KV-backed config (strategy toggles, thresholds, scheduling)
 │  ├─ state.py             # sqlite persistence (kv, events, health, trades)
-│  ├─ news.py              # news counts (Alpaca→Finnhub→NewsAPI fallback & cooldown)
+│  ├─ news.py              # news articles with sentiment analysis (Alpaca→Finnhub→NewsAPI fallback & cooldown)
 │  ├─ earnings.py          # Finnhub earnings calendar loader
 │  ├─ strategies.py        # momentum, mean-reversion, news score, combiner
 │  ├─ universe.py          # loads S&P 500 universe from CSV or env list
@@ -112,6 +113,9 @@ source venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
 pip install -e .
+
+# Download TextBlob corpora for sentiment analysis
+python -m textblob.download_corpora
 ```
 
 ### B) Start the app
@@ -161,7 +165,7 @@ The engine ranks potential trades via a weighted score:
 
 - **Momentum**: price vs daily open; stronger trend → higher score
 - **Mean-reversion**: price below previous close → potential revert
-- **News**: recent article count → higher interest → small bias
+- **News**: article sentiment analysis (positive/negative) → directional bias based on news tone
 - **Earnings**: calendar can be used to auto-include reporting names (toggle)
 - **Long-term**: placeholders available to extend (toggle)
 
@@ -378,6 +382,9 @@ source venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
 pip install -e .
+
+# Download TextBlob corpora for sentiment analysis (first run only)
+python -m textblob.download_corpora
 
 # load env
 export $(grep -v '^#' .env | xargs)

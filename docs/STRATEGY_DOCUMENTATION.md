@@ -132,37 +132,67 @@ If combined with other strategies (news, volume), final score could exceed 0.62
 
 ### 3. News Strategy
 
-**What it does:** Scores stocks with high recent news activity (6-hour window)
+**What it does:** Analyzes recent news articles (6-hour window) with sentiment analysis to determine positive or negative bias
 
 **Scoring Formula:**
 ```python
-score = min(1.0, log(news_count + 1) / log(20))
+volume_score = min(0.5, log(article_count + 1) / log(20) × 0.5)
+sentiment_component = avg_sentiment × 0.5  # -1 to +1 sentiment
+score = max(0.0, min(1.0, volume_score + sentiment_component))
 ```
 
-**Logarithmic Scaling:**
-| News Articles | Score |
-|--------------|-------|
-| 0 | 0.00 |
-| 1 | 0.23 |
-| 3 | 0.46 |
-| 5 | 0.60 |
-| 10 | 0.80 |
-| 20+ | 1.00 |
+**Components:**
+- **Volume Score (0-0.5):** Logarithmic scaling based on article count (activity level)
+- **Sentiment Component (-0.5 to +0.5):** Average sentiment polarity across articles
+  - Positive sentiment (+0.5 to +1.0) → adds to score
+  - Negative sentiment (-1.0 to -0.5) → subtracts from score
+  - Neutral sentiment (0) → no adjustment
 
-**Purchase Trigger:** Combined with other strategies, boosts final score
+**Sentiment Analysis:** Uses TextBlob for natural language processing of headlines and summaries, with keyword-based fallback
+
+**Scoring Examples:**
+| Articles | Avg Sentiment | Volume Score | Sentiment Component | Final Score |
+|----------|---------------|--------------|---------------------|-------------|
+| 0 | 0.0 | 0.00 | 0.00 | 0.00 |
+| 5 | +0.8 (very positive) | 0.30 | +0.40 | 0.70 |
+| 5 | +0.2 (slightly positive) | 0.30 | +0.10 | 0.40 |
+| 5 | -0.6 (negative) | 0.30 | -0.30 | 0.00 |
+| 10 | +0.4 (positive) | 0.39 | +0.20 | 0.59 |
+| 20 | +0.6 (positive) | 0.50 | +0.30 | 0.80 |
+
+**Purchase Trigger:** Positive news sentiment boosts final score; negative sentiment reduces it
 
 **Example Buy Scenario:**
 ```
 Symbol: TSLA
 - 8 news articles in past 6 hours
-- Score = log(8+1) / log(20) = 0.73
+- Sentiment breakdown: 5 positive (+0.7 avg), 2 neutral (0), 1 negative (-0.3)
+- Average sentiment: ((5×0.7) + (2×0) + (1×-0.3)) / 8 = +0.40
+
+volume_score = log(8+1)/log(20) × 0.5 = 0.366
+sentiment_component = 0.40 × 0.5 = 0.20
+score = 0.366 + 0.20 = 0.566
 
 Combined with positive momentum (0.55), final score = weighted average
 If news weight is 0.10 and momentum weight is 0.35:
-final = (0.73 × 0.10) + (0.55 × 0.35) + ... ≈ 0.65 → BUY
+final = (0.566 × 0.10) + (0.55 × 0.35) + ... ≈ 0.65 → BUY
 ```
 
-**Code Location:** `strategies.py:87-105`
+**Example Avoid Scenario:**
+```
+Symbol: ABC
+- 6 news articles, mostly negative (earnings miss, downgrade)
+- Average sentiment: -0.7 (very negative)
+
+volume_score = 0.35
+sentiment_component = -0.7 × 0.5 = -0.35
+score = 0.35 + (-0.35) = 0.00
+
+Even with high volume, negative sentiment prevents entry
+Protects against buying into bad news
+```
+
+**Code Location:** `strategies.py:93-181`, `news.py:171-210`
 
 ---
 
@@ -655,7 +685,7 @@ Current: $825 (up +3.1% total)
 High: $828
 Low: $808
 Volume: 45M (avg: 30M → 1.5x)
-News articles (6hr): 4
+News articles (6hr): 4 (3 positive, 1 neutral, avg sentiment: +0.5)
 Earnings: Not scheduled
 Account equity: $50,000
 Existing positions: 2
@@ -697,11 +727,14 @@ Weighted contribution: 0 × 0.05 = 0
 
 **News:**
 ```
-news_count = 4
-score = log(4+1)/log(20) = 0.537
+news_articles = 4 (3 positive, 1 neutral)
+avg_sentiment = 0.5 (moderately positive)
+volume_score = log(4+1)/log(20) × 0.5 = 0.269
+sentiment_component = 0.5 × 0.5 = 0.25
+score = 0.269 + 0.25 = 0.519
 
 Weight: 0.08
-Weighted contribution: 0.537 × 0.08 = 0.043
+Weighted contribution: 0.519 × 0.08 = 0.042
 ```
 
 **Volume:**
@@ -735,17 +768,17 @@ Weighted contribution: 0.2188 × 0.10 = 0.02188
 
 **Total:**
 ```
-final_score = 0.252 + 0 + 0.043 + 0.09 + 0.0625 + 0.02188
-final_score = 0.469
+final_score = 0.252 + 0 + 0.042 + 0.09 + 0.0625 + 0.02188
+final_score = 0.468
 
-Active strategies: momentum (0.72), volume (0.6), news (0.537), longterm_trend (0.31)
+Active strategies: momentum (0.72), volume (0.6), news (0.519), longterm_trend (0.31)
 Count: 4 strategies > 0.3
 Confidence: mean of weights ≈ 0.16
 ```
 
 ### Step 3: Entry Signal Check
 ```
-✗ final_score (0.469) >= 0.62 threshold → FAILS
+✗ final_score (0.468) >= 0.62 threshold → FAILS
 
 RESULT: NO ENTRY - Score too low despite good signals
 ```
@@ -754,7 +787,8 @@ RESULT: NO ENTRY - Score too low despite good signals
 
 **What would trigger entry:**
 - Higher volume (2.5x instead of 1.5x) → volume score 0.8
-- More news articles (8 instead of 4) → news score 0.73
+- More positive news articles (8 articles with +0.6 sentiment) → news score 0.67
+- More positive sentiment (+0.8 instead of +0.5) → news score 0.67
 - Either would push final_score above 0.62
 
 ---
