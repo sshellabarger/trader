@@ -382,6 +382,14 @@ class StrategyBacktester:
             elif strategy_type == StrategyType.NEWS:
                 news_data = kwargs.get('news_data', [])
                 window_hours = self.config.strategy_params.get('news_window_hours', 6)
+
+                # Debug logging for news strategy
+                if news_data:
+                    symbol_news = [a for a in news_data if a.symbol == symbol]
+                    logger.debug(f"News for {symbol}: {len(symbol_news)} articles out of {len(news_data)} total")
+                else:
+                    logger.debug(f"No news data available for {symbol}")
+
                 score, details = strategy_func(symbol, news_data, window_hours)
 
             elif strategy_type == StrategyType.VOLUME:
@@ -485,7 +493,10 @@ class StrategyBacktester:
             )
 
             self.signals.append(signal)
+            logger.info(f"SIGNAL: {symbol} score={score:.3f} (threshold={self.config.entry_threshold}) - {details}")
             return signal
+        else:
+            logger.debug(f"No signal for {symbol}: score={score:.3f} < threshold={self.config.entry_threshold}")
 
         return None
 

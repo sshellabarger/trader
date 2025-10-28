@@ -175,6 +175,14 @@ def test_single_strategy(args):
         news_data = get_news_for_symbols(test_symbols, hours=6)
         logger.info(f"Fetched {len(news_data)} news articles")
 
+        # Log news breakdown by symbol
+        if news_data:
+            from collections import Counter
+            symbol_counts = Counter(a.symbol for a in news_data)
+            logger.info(f"News by symbol: {dict(symbol_counts)}")
+        else:
+            logger.warning("No news articles fetched - news strategy will return 0 scores")
+
     if strategy_type == StrategyType.EARNINGS:
         logger.info("Fetching earnings calendar...")
         earnings_calendar = fetch_earnings_calendar()
