@@ -33,6 +33,7 @@ from trading_bot.strategy_optimizer import (
 from trading_bot.broker_alpaca import AlpacaBroker
 from trading_bot.news import get_news_for_symbols
 from trading_bot.earnings import fetch_earnings_calendar
+from trading_bot.universe import load_universe
 
 # Setup logging
 logging.basicConfig(
@@ -40,6 +41,92 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def load_test_symbols(args) -> List[str]:
+    """
+    Load symbols from various sources based on args
+
+    Priority:
+    1. --symbols-file (CSV or text file)
+    2. --symbols (comma-separated list)
+    3. --use-watchlist (main bot's universe)
+    4. Default list
+    """
+    # Option 1: Load from file
+    if hasattr(args, 'symbols_file') and args.symbols_file:
+        logger.info(f"Loading symbols from file: {args.symbols_file}")
+        try:
+            with open(args.symbols_file, 'r') as f:
+                content = f.read().strip()
+
+            # Handle CSV format (with or without header)
+            symbols = []
+            for line in content.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                # Skip common CSV headers
+                if line.upper() in ['SYMBOL', 'TICKER', 'SYMBOLS', 'TICKERS']:
+                    continue
+
+                # Split by comma and clean
+                parts = [s.strip().upper() for s in line.split(',')]
+                symbols.extend([s for s in parts if s and not s.startswith('#')])
+
+            if symbols:
+                logger.info(f"Loaded {len(symbols)} symbols from file: {', '.join(symbols[:10])}{'...' if len(symbols) > 10 else ''}")
+                return symbols
+            else:
+                logger.warning(f"No valid symbols found in {args.symbols_file}, using defaults")
+
+        except FileNotFoundError:
+            logger.error(f"Symbols file not found: {args.symbols_file}")
+            sys.exit(1)
+        except Exception as e:
+            logger.error(f"Error reading symbols file: {e}")
+            sys.exit(1)
+
+    # Option 2: Load from --use-watchlist (main bot's universe)
+    if hasattr(args, 'use_watchlist') and args.use_watchlist:
+        logger.info("Loading symbols from main bot's watchlist")
+        try:
+            # Load using the same function as the main bot
+            symbols = load_universe()
+
+            # Separate stocks and crypto
+            stock_symbols = [s for s in symbols if '/' not in s and not s.endswith('USD')]
+            crypto_symbols = [s for s in symbols if '/' in s or s.endswith('USD')]
+
+            # Use stocks by default, unless --include-crypto is set
+            if hasattr(args, 'include_crypto') and args.include_crypto and crypto_symbols:
+                symbols = stock_symbols + crypto_symbols
+                logger.info(f"Loaded {len(stock_symbols)} stocks and {len(crypto_symbols)} crypto from watchlist")
+            else:
+                symbols = stock_symbols
+                logger.info(f"Loaded {len(stock_symbols)} stocks from watchlist")
+
+            if symbols:
+                logger.info(f"Using symbols: {', '.join(symbols[:10])}{'...' if len(symbols) > 10 else ''}")
+                return symbols
+            else:
+                logger.warning("Watchlist is empty, using defaults")
+
+        except Exception as e:
+            logger.error(f"Error loading watchlist: {e}")
+            logger.info("Falling back to defaults")
+
+    # Option 3: Command-line symbols
+    if hasattr(args, 'symbols') and args.symbols:
+        symbols = [s.strip().upper() for s in args.symbols.split(',')]
+        logger.info(f"Using {len(symbols)} symbols from command line: {', '.join(symbols)}")
+        return symbols
+
+    # Option 4: Default symbols
+    default_symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX']
+    logger.info(f"Using default symbols: {', '.join(default_symbols)}")
+    return default_symbols
 
 
 def test_single_strategy(args):
@@ -54,13 +141,8 @@ def test_single_strategy(args):
         logger.error(f"Valid strategies: {', '.join([s.value for s in StrategyType])}")
         return
 
-    # Parse test symbols
-    test_symbols = []
-    if args.symbols:
-        test_symbols = [s.strip().upper() for s in args.symbols.split(',')]
-    else:
-        # Default symbols
-        test_symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX']
+    # Load test symbols using the new helper
+    test_symbols = load_test_symbols(args)
 
     # Create config
     config = StrategyTestConfig(
@@ -216,10 +298,8 @@ def optimize_strategy(args):
         logger.error(f"Valid strategies: {', '.join([s.value for s in StrategyType])}")
         return
 
-    # Parse test symbols
-    test_symbols = []
-    if args.symbols:
-        test_symbols = [s.strip().upper() for s in args.symbols.split(',')]
+    # Load test symbols using the new helper
+    test_symbols = load_test_symbols(args)
 
     # Create base config
     base_config = StrategyTestConfig(
@@ -329,6 +409,8 @@ Examples:
     test_parser.add_argument('strategy', help='Strategy to test (momentum, mean_reversion, etc.)')
     test_parser.add_argument('--duration', type=int, default=60, help='Test duration in minutes (default: 60)')
     test_parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols to test')
+    test_parser.add_argument('--symbols-file', type=str, help='Path to file with symbols (one per line or CSV)')
+    test_parser.add_argument('--use-watchlist', action='store_true', help='Use main bot\'s watchlist (from DAYTRADER_UNIVERSE)')
     test_parser.add_argument('--entry-threshold', type=float, default=0.5, help='Entry threshold (default: 0.5)')
     test_parser.add_argument('--exit-threshold', type=float, default=0.3, help='Exit threshold (default: 0.3)')
     test_parser.add_argument('--stop-loss', type=float, default=0.5, help='Stop loss %% (default: 0.5)')
@@ -344,6 +426,8 @@ Examples:
     test_all_parser = subparsers.add_parser('test-all', help='Test all strategies')
     test_all_parser.add_argument('--duration', type=int, default=30, help='Test duration in minutes (default: 30)')
     test_all_parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols to test')
+    test_all_parser.add_argument('--symbols-file', type=str, help='Path to file with symbols (one per line or CSV)')
+    test_all_parser.add_argument('--use-watchlist', action='store_true', help='Use main bot\'s watchlist (from DAYTRADER_UNIVERSE)')
     test_all_parser.add_argument('--include-crypto', action='store_true', help='Include crypto strategy')
     test_all_parser.add_argument('--entry-threshold', type=float, default=0.5, help='Entry threshold (default: 0.5)')
     test_all_parser.add_argument('--exit-threshold', type=float, default=0.3, help='Exit threshold (default: 0.3)')
@@ -361,6 +445,8 @@ Examples:
     optimize_parser.add_argument('strategy', help='Strategy to optimize')
     optimize_parser.add_argument('--duration', type=int, default=30, help='Test duration per combination (default: 30)')
     optimize_parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols to test')
+    optimize_parser.add_argument('--symbols-file', type=str, help='Path to file with symbols (one per line or CSV)')
+    optimize_parser.add_argument('--use-watchlist', action='store_true', help='Use main bot\'s watchlist (from DAYTRADER_UNIVERSE)')
     optimize_parser.add_argument('--quick', action='store_true', help='Quick optimization (reduced parameter space)')
     optimize_parser.add_argument('--top-n', type=int, default=10, help='Number of top results to show (default: 10)')
     optimize_parser.add_argument('--capital', type=float, default=100000.0, help='Starting capital (default: 100000)')
