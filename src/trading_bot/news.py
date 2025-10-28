@@ -250,3 +250,17 @@ def get_news_counts(symbols: List[str], window_hours: int, provider_order: List[
     for article in articles:
         counts[article.symbol] = counts.get(article.symbol, 0) + 1
     return counts
+
+def get_news_for_symbols(symbols: List[str], hours: int = 6) -> List[NewsArticle]:
+    """
+    Simplified interface for getting news articles with sentiment.
+
+    Args:
+        symbols: List of stock symbols
+        hours: How many hours back to fetch news (default: 6)
+
+    Returns:
+        List of NewsArticle objects with sentiment_score filled in
+    """
+    provider_order = ["alpaca", "finnhub", "newsapi"]
+    return get_news_articles(symbols, hours, provider_order)
