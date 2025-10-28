@@ -5,10 +5,29 @@ Strategy Testing CLI
 Command-line tool for testing trading strategies individually with
 comprehensive metrics and optimization capabilities.
 
+Each strategy has its own optimal parameters (entry/exit thresholds, stop loss,
+take profit, duration). These are used automatically unless overridden via CLI.
+
 Usage:
-    python test_strategy.py test momentum --duration 60
-    python test_strategy.py test-all --duration 30
+    # Test single strategy with its optimal parameters
+    python test_strategy.py test momentum
+
+    # Test with custom parameters (overrides defaults)
+    python test_strategy.py test momentum --duration 60 --entry-threshold 0.7
+
+    # Test all strategies, each with their own optimal parameters
+    python test_strategy.py test-all
+
+    # Override parameters for all strategies in test-all
+    python test_strategy.py test-all --duration 30 --entry-threshold 0.6
+
+    # Show all strategy configurations
+    python test_strategy.py show-configs
+
+    # Optimize strategy parameters
     python test_strategy.py optimize momentum --duration 30
+
+    # Compare multiple results
     python test_strategy.py compare results/*.json
 """
 
@@ -30,6 +49,7 @@ from trading_bot.strategy_testing import (
 from trading_bot.strategy_optimizer import (
     StrategyOptimizer, create_default_parameter_ranges
 )
+from trading_bot.strategy_configs import get_strategy_config, print_all_configs
 from trading_bot.broker_alpaca import AlpacaBroker
 from trading_bot.news import get_news_for_symbols
 from trading_bot.earnings import fetch_earnings_calendar
@@ -144,17 +164,33 @@ def test_single_strategy(args):
     # Load test symbols using the new helper
     test_symbols = load_test_symbols(args)
 
+    # Get strategy-specific defaults
+    strategy_defaults = get_strategy_config(strategy_type)
+
+    # Use command-line args if provided, otherwise use strategy-specific defaults
+    duration = args.duration if hasattr(args, 'duration') and args.duration is not None else strategy_defaults['default_duration']
+    entry_threshold = args.entry_threshold if hasattr(args, 'entry_threshold') and args.entry_threshold is not None else strategy_defaults['entry_threshold']
+    exit_threshold = args.exit_threshold if hasattr(args, 'exit_threshold') and args.exit_threshold is not None else strategy_defaults['exit_threshold']
+    stop_loss = args.stop_loss if hasattr(args, 'stop_loss') and args.stop_loss is not None else strategy_defaults['stop_loss_pct']
+    take_profit = args.take_profit if hasattr(args, 'take_profit') and args.take_profit is not None else strategy_defaults['take_profit_pct']
+    max_hold = args.max_hold if hasattr(args, 'max_hold') and args.max_hold is not None else strategy_defaults['max_hold_minutes']
+    position_size = args.position_size if hasattr(args, 'position_size') and args.position_size is not None else strategy_defaults['position_size_pct']
+
+    logger.info(f"Using parameters for {strategy_type.value}:")
+    logger.info(f"  Duration: {duration} min, Entry: {entry_threshold}, Exit: {exit_threshold}")
+    logger.info(f"  Stop Loss: {stop_loss}%, Take Profit: {take_profit}%, Max Hold: {max_hold} min")
+
     # Create config
     config = StrategyTestConfig(
         strategy=strategy_type,
         mode='live',
-        live_duration_minutes=args.duration,
-        entry_threshold=args.entry_threshold,
-        exit_threshold=args.exit_threshold,
-        stop_loss_pct=args.stop_loss,
-        take_profit_pct=args.take_profit,
-        max_hold_minutes=args.max_hold,
-        position_size_pct=args.position_size,
+        live_duration_minutes=duration,
+        entry_threshold=entry_threshold,
+        exit_threshold=exit_threshold,
+        stop_loss_pct=stop_loss,
+        take_profit_pct=take_profit,
+        max_hold_minutes=max_hold,
+        position_size_pct=position_size,
         max_positions=args.max_positions,
         test_symbols=test_symbols,
         starting_capital=args.capital,
@@ -243,8 +279,8 @@ def test_single_strategy(args):
 
 
 def test_all_strategies(args):
-    """Test all strategies"""
-    logger.info("Testing all strategies")
+    """Test all strategies with their own optimal parameters"""
+    logger.info("Testing all strategies with strategy-specific parameters")
 
     all_strategies = [
         StrategyType.MOMENTUM,
@@ -375,6 +411,11 @@ def compare_results(args):
     logger.info(f"\nComparison complete! Report saved to {output_file}")
 
 
+def show_configs(args):
+    """Show strategy configurations"""
+    print_all_configs()
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -382,16 +423,22 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Test momentum strategy for 60 minutes
-  python test_strategy.py test momentum --duration 60
+  # Show all strategy configurations
+  python test_strategy.py show-configs
 
-  # Test with custom parameters
-  python test_strategy.py test momentum --duration 30 --entry-threshold 0.7 --stop-loss 0.3
+  # Test momentum strategy with its optimal parameters
+  python test_strategy.py test momentum
+
+  # Test with custom parameters (overrides defaults)
+  python test_strategy.py test momentum --duration 60 --entry-threshold 0.7
 
   # Test specific symbols
-  python test_strategy.py test news --symbols AAPL,MSFT,GOOGL --duration 30
+  python test_strategy.py test news --symbols AAPL,MSFT,GOOGL
 
-  # Test all strategies
+  # Test all strategies with their individual optimal parameters
+  python test_strategy.py test-all
+
+  # Test all strategies with overridden duration
   python test_strategy.py test-all --duration 30
 
   # Optimize strategy parameters
@@ -399,6 +446,9 @@ Examples:
 
   # Compare multiple results
   python test_strategy.py compare results/momentum_*.json
+
+Note: Each strategy has different optimal parameters. Use show-configs to see them.
+      Command-line arguments override the per-strategy defaults.
         """
     )
 
@@ -407,34 +457,34 @@ Examples:
     # Test command
     test_parser = subparsers.add_parser('test', help='Test a single strategy')
     test_parser.add_argument('strategy', help='Strategy to test (momentum, mean_reversion, etc.)')
-    test_parser.add_argument('--duration', type=int, default=60, help='Test duration in minutes (default: 60)')
+    test_parser.add_argument('--duration', type=int, default=None, help='Test duration in minutes (default: strategy-specific)')
     test_parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols to test')
     test_parser.add_argument('--symbols-file', type=str, help='Path to file with symbols (one per line or CSV)')
     test_parser.add_argument('--use-watchlist', action='store_true', help='Use main bot\'s watchlist (from DAYTRADER_UNIVERSE)')
-    test_parser.add_argument('--entry-threshold', type=float, default=0.5, help='Entry threshold (default: 0.5)')
-    test_parser.add_argument('--exit-threshold', type=float, default=0.3, help='Exit threshold (default: 0.3)')
-    test_parser.add_argument('--stop-loss', type=float, default=0.5, help='Stop loss %% (default: 0.5)')
-    test_parser.add_argument('--take-profit', type=float, default=2.0, help='Take profit %% (default: 2.0)')
-    test_parser.add_argument('--max-hold', type=int, default=240, help='Max hold time in minutes (default: 240)')
-    test_parser.add_argument('--position-size', type=float, default=2.0, help='Position size %% (default: 2.0)')
+    test_parser.add_argument('--entry-threshold', type=float, default=None, help='Entry threshold (default: strategy-specific)')
+    test_parser.add_argument('--exit-threshold', type=float, default=None, help='Exit threshold (default: strategy-specific)')
+    test_parser.add_argument('--stop-loss', type=float, default=None, help='Stop loss %% (default: strategy-specific)')
+    test_parser.add_argument('--take-profit', type=float, default=None, help='Take profit %% (default: strategy-specific)')
+    test_parser.add_argument('--max-hold', type=int, default=None, help='Max hold time in minutes (default: strategy-specific)')
+    test_parser.add_argument('--position-size', type=float, default=None, help='Position size %% (default: strategy-specific)')
     test_parser.add_argument('--max-positions', type=int, default=5, help='Max concurrent positions (default: 5)')
     test_parser.add_argument('--capital', type=float, default=100000.0, help='Starting capital (default: 100000)')
     test_parser.add_argument('--output-dir', type=str, default='./test_results', help='Output directory')
     test_parser.set_defaults(func=test_single_strategy)
 
     # Test all command
-    test_all_parser = subparsers.add_parser('test-all', help='Test all strategies')
-    test_all_parser.add_argument('--duration', type=int, default=30, help='Test duration in minutes (default: 30)')
+    test_all_parser = subparsers.add_parser('test-all', help='Test all strategies with their optimal parameters')
+    test_all_parser.add_argument('--duration', type=int, default=None, help='Override duration for all strategies (default: per-strategy)')
     test_all_parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols to test')
     test_all_parser.add_argument('--symbols-file', type=str, help='Path to file with symbols (one per line or CSV)')
     test_all_parser.add_argument('--use-watchlist', action='store_true', help='Use main bot\'s watchlist (from DAYTRADER_UNIVERSE)')
     test_all_parser.add_argument('--include-crypto', action='store_true', help='Include crypto strategy')
-    test_all_parser.add_argument('--entry-threshold', type=float, default=0.5, help='Entry threshold (default: 0.5)')
-    test_all_parser.add_argument('--exit-threshold', type=float, default=0.3, help='Exit threshold (default: 0.3)')
-    test_all_parser.add_argument('--stop-loss', type=float, default=0.5, help='Stop loss %% (default: 0.5)')
-    test_all_parser.add_argument('--take-profit', type=float, default=2.0, help='Take profit %% (default: 2.0)')
-    test_all_parser.add_argument('--max-hold', type=int, default=240, help='Max hold time in minutes (default: 240)')
-    test_all_parser.add_argument('--position-size', type=float, default=2.0, help='Position size %% (default: 2.0)')
+    test_all_parser.add_argument('--entry-threshold', type=float, default=None, help='Override entry threshold for all (default: per-strategy)')
+    test_all_parser.add_argument('--exit-threshold', type=float, default=None, help='Override exit threshold for all (default: per-strategy)')
+    test_all_parser.add_argument('--stop-loss', type=float, default=None, help='Override stop loss %% for all (default: per-strategy)')
+    test_all_parser.add_argument('--take-profit', type=float, default=None, help='Override take profit %% for all (default: per-strategy)')
+    test_all_parser.add_argument('--max-hold', type=int, default=None, help='Override max hold time for all (default: per-strategy)')
+    test_all_parser.add_argument('--position-size', type=float, default=None, help='Override position size %% for all (default: per-strategy)')
     test_all_parser.add_argument('--max-positions', type=int, default=5, help='Max concurrent positions (default: 5)')
     test_all_parser.add_argument('--capital', type=float, default=100000.0, help='Starting capital (default: 100000)')
     test_all_parser.add_argument('--output-dir', type=str, default='./test_results', help='Output directory')
@@ -458,6 +508,10 @@ Examples:
     compare_parser.add_argument('result_files', nargs='+', help='Result JSON files to compare')
     compare_parser.add_argument('--output-dir', type=str, default='./test_results', help='Output directory')
     compare_parser.set_defaults(func=compare_results)
+
+    # Show configs command
+    config_parser = subparsers.add_parser('show-configs', help='Show strategy-specific configurations')
+    config_parser.set_defaults(func=show_configs)
 
     # Parse args
     args = parser.parse_args()
