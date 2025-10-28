@@ -4,12 +4,13 @@ Includes: momentum, mean_reversion, news, volume, earnings, longterm_trend, long
 """
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
 import statistics
 
 # Import strategy scoring functions
 from . import strategies as strat
+from .strategy_configs import get_strategy_config
 
 
 class MarketRegime(Enum):
@@ -553,8 +554,20 @@ class StrategyManager:
 
         return candidates
 
-    def get_entry_signal(self, signal: CombinedSignal, entry_threshold: float = 0.62) -> Tuple[bool, str]:
-        """Determine if signal is strong enough for entry"""
+    def get_entry_signal(
+        self,
+        signal: CombinedSignal,
+        entry_threshold: float = 0.62,
+        strategy_config: Optional[Dict[str, Any]] = None
+    ) -> Tuple[bool, str]:
+        """
+        Determine if signal is strong enough for entry.
+        Uses strategy-specific configuration if provided.
+        """
+        # Use strategy-specific threshold if available
+        if strategy_config:
+            entry_threshold = strategy_config.get('entry_threshold', entry_threshold)
+
         if signal.final_score < entry_threshold:
             return False, f"Score {signal.final_score:.2f} < threshold {entry_threshold}"
 
@@ -571,8 +584,24 @@ class StrategyManager:
 
         return True, f"Strong signal: {signal.final_score:.2f}"
 
-    def calculate_stop_loss(self, entry_price: float, regime: MarketRegime, base_stop_bps: float = 50.0, is_crypto: bool = False) -> float:
-        """Calculate stop loss price based on regime and asset type"""
+    def calculate_stop_loss(
+        self,
+        entry_price: float,
+        regime: MarketRegime,
+        base_stop_bps: float = 50.0,
+        is_crypto: bool = False,
+        strategy_config: Optional[Dict[str, Any]] = None
+    ) -> float:
+        """
+        Calculate stop loss price based on regime and asset type.
+        Uses strategy-specific stop loss if provided in config.
+        """
+        # If strategy config provided, use its stop_loss_pct as base
+        if strategy_config and 'stop_loss_pct' in strategy_config:
+            # strategy_config has stop_loss_pct (e.g., 0.8 = 0.8%)
+            # Convert to basis points: 0.8% = 80 bps
+            base_stop_bps = strategy_config['stop_loss_pct'] * 100
+
         regime_multipliers = {
             MarketRegime.TRENDING_UP: 0.8,
             MarketRegime.TRENDING_DOWN: 1.2,
@@ -583,11 +612,11 @@ class StrategyManager:
         }
 
         multiplier = regime_multipliers.get(regime, 1.0)
-        
+
         # Crypto needs wider stops due to higher volatility
         if is_crypto:
             multiplier *= 2.0
-        
+
         adjusted_stop_bps = base_stop_bps * multiplier
         stop_loss = entry_price * (1 - adjusted_stop_bps / 10000.0)
 
