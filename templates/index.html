@@ -1162,6 +1162,12 @@
                         </div>
                         <div class="setting-item">
                             <label class="toggle">
+                                <input type="checkbox" id="setting-volume" ${settings.strategies?.volume !== false ? 'checked' : ''}>
+                                <span>Volume</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
                                 <input type="checkbox" id="setting-earnings" ${settings.strategies?.earnings ? 'checked' : ''}>
                                 <span>Earnings</span>
                             </label>
@@ -1488,6 +1494,7 @@
                     momentum: document.getElementById('setting-momentum').checked,
                     mean_reversion: document.getElementById('setting-mean-reversion').checked,
                     news: document.getElementById('setting-news').checked,
+                    volume: document.getElementById('setting-volume').checked,
                     earnings: document.getElementById('setting-earnings').checked,
                     longterm_trend: document.getElementById('setting-longterm-trend').checked,
                     longterm_momentum: document.getElementById('setting-longterm-momentum').checked,
