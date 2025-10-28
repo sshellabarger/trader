@@ -139,9 +139,8 @@ def check_settings():
         for key, val in thresholds.items():
             print(f"  {key}: {val}")
     else:
-        print("\nNo thresholds configured - using defaults")
-        print("  Default entry threshold: 0.62")
-        print("  Default exit threshold: 0.45")
+        print("\nNo thresholds configured - using strategy-specific defaults")
+        print("  (See strategy_configs.py for strategy-specific entry/exit thresholds)")
 
     # Check crypto
     crypto_str = state.get_kv('crypto')
@@ -183,27 +182,22 @@ def check_candidates():
                     score = cand.get('final_score', cand.get('score', 0))
                     print(f"  {i}. {symbol}: score={score:.3f}")
 
-                # Check entry threshold
+                # Check entry threshold (now strategy-specific)
                 print("\n⚠️  Checking if scores meet entry threshold...")
-                thresholds_str = state.get_kv('thresholds')
-                if thresholds_str:
-                    thresholds = json.loads(thresholds_str)
-                    entry_threshold = thresholds.get('enter', 0.62)
-                else:
-                    entry_threshold = 0.62
-
-                print(f"   Entry threshold: {entry_threshold}")
+                print(f"   NOTE: Entry thresholds are now strategy-specific (see strategy_configs.py)")
+                print(f"   Default entry threshold for most strategies: ~0.62")
 
                 top_score = candidates[0].get('final_score', candidates[0].get('score', 0))
+                # Use a reasonable default for diagnostic purposes
+                entry_threshold = 0.62
+
                 if top_score < entry_threshold:
-                    print(f"   ⚠️  Top score ({top_score:.3f}) < threshold ({entry_threshold})")
-                    print("   Bot won't trade because no candidates meet the threshold!")
-                    print("\n   TO FIX: Lower the entry threshold:")
-                    print(
-                        f"   curl -X POST http://localhost:8000/api/settings -H 'Content-Type: application/json' -d '{{\"thresholds\":{{\"enter\":0.50}}}}'")
+                    print(f"   ⚠️  Top score ({top_score:.3f}) < typical threshold ({entry_threshold})")
+                    print("   Bot may not trade if candidates don't meet strategy-specific thresholds")
+                    print("\n   TO FIX: Adjust strategy-specific thresholds in strategy_configs.py")
                     return False
                 else:
-                    print(f"   ✓ Top score ({top_score:.3f}) >= threshold ({entry_threshold})")
+                    print(f"   ✓ Top score ({top_score:.3f}) >= typical threshold ({entry_threshold})")
                     return True
             else:
                 print("\n⚠️  No candidates found")
@@ -363,9 +357,8 @@ def main():
         print("\n" + "=" * 60)
         print("QUICK FIXES:")
         print("=" * 60)
-        print("\n1. To lower entry threshold (make bot trade more):")
-        print("   curl -X POST http://localhost:8000/api/settings -H 'Content-Type: application/json' \\")
-        print("     -d '{\"thresholds\":{\"enter\":0.50}}'")
+        print("\n1. To adjust entry thresholds (make bot trade more):")
+        print("   Edit strategy_configs.py and adjust 'entry_threshold' for specific strategies")
 
         print("\n2. To enable crypto trading 24/7:")
         print("   curl -X POST http://localhost:8000/api/settings -H 'Content-Type: application/json' \\")

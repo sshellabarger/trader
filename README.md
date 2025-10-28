@@ -169,13 +169,17 @@ The engine ranks potential trades via a weighted score:
 - **Earnings**: calendar can be used to auto-include reporting names (toggle)
 - **Long-term**: placeholders available to extend (toggle)
 
-**Weights & thresholds** are in `settings.py` and can be overwritten at runtime:
-- `thresholds.enter` (default `0.62`) — minimum score to consider a buy
-- `thresholds.exit` (default `0.45`) — (hook point if you implement exits)
-- `thresholds.min_spread_bps` — ignore wide spreads
-- `thresholds.trade_stop_loss_bps` & `thresholds.daily_stop_loss_pct` — risk controls (hook points; add your own enforcement in `engine.py`)
+**Strategy-specific parameters** are in `strategy_configs.py` and include:
+- `entry_threshold` — minimum score to consider a buy (varies by strategy)
+- `exit_threshold` — score threshold for exits (varies by strategy)
+- `take_profit_pct` — take profit percentage (varies by strategy)
+- `position_size_pct` — position sizing (varies by strategy)
 
-> The shipped trading action is **intentionally conservative** (demo): it may send a small **buy** if top candidate score ≥ `enter`. You should implement your complete position sizing, exit logic, and risk management before live usage.
+**Global thresholds** in `settings.py` that apply across all strategies:
+- `thresholds.min_spread_bps` — ignore wide spreads
+- `thresholds.trade_stop_loss_bps` & `thresholds.daily_stop_loss_pct` — risk controls
+
+> The shipped trading action is **intentionally conservative** (demo): it may send a small **buy** if top candidate score meets strategy-specific thresholds. You should implement your complete position sizing, exit logic, and risk management before live usage.
 
 ---
 
@@ -270,11 +274,9 @@ curl -X POST http://localhost:8000/api/settings   -H 'Content-Type: application/
   }'
 ```
 
-- **Adjust entry threshold** to be more selective:
-
-```bash
-curl -X POST http://localhost:8000/api/settings   -H 'Content-Type: application/json'   -d '{"thresholds":{"enter":0.70}}'
-```
+- **Adjust entry thresholds** to be more selective:
+  - Edit `src/trading_bot/strategy_configs.py` and modify `entry_threshold` for specific strategies
+  - Each strategy has its own entry/exit thresholds and parameters
 
 ---
 
@@ -345,8 +347,8 @@ If you change package layout, ensure `pyproject.toml` has `package-dir = {"" = "
   - Try `LOG_LEVEL=DEBUG` and check `data/app.log` for Alpaca `/v2/positions` call results.
 
 ### No trades happening
-- The shipped logic is conservative and executes **buy** only on a high combined score.  
-  To stimulate activity (paper accounts), lower `thresholds.enter` (e.g., `0.58`), enable more strategies, or broaden the universe.  
+- The shipped logic is conservative and executes **buy** only on a high combined score.
+  To stimulate activity (paper accounts), lower strategy-specific `entry_threshold` values in `strategy_configs.py` (e.g., from `0.62` to `0.58`), enable more strategies, or broaden the universe.
   Ensure market is **open** (UI Health → `clock`).
 
 ---

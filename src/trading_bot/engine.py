@@ -373,9 +373,6 @@ class Trader:
             if not positions:
                 return
 
-            # Default take profit threshold (fallback)
-            default_take_profit_pct = self.settings.get('thresholds', {}).get('take_profit_pct', 2.0)
-
             for position in positions:
                 symbol = position.get('symbol')
                 qty = int(position.get('qty', 0))
@@ -393,7 +390,8 @@ class Trader:
 
                 # Get strategy-specific config
                 strategy_config = get_strategy_config(position_strategy)
-                take_profit_pct = strategy_config.get('take_profit_pct', default_take_profit_pct)
+                # All strategies now have take_profit_pct defined in strategy_configs.py
+                take_profit_pct = strategy_config.get('take_profit_pct', 2.0)
 
                 # Check take profit
                 if unrealized_plpc >= take_profit_pct:
