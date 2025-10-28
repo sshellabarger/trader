@@ -49,10 +49,48 @@ class PositionMonitor:
         self.trading_halted = False
         self.halt_reason = None
 
+        # Position metadata: symbol -> strategy info
+        self.position_metadata: Dict[str, Dict] = {}
+
         # Threading
         self._monitor_thread = None
         self._running = False
         self._stop_event = threading.Event()
+
+    def register_position(
+        self,
+        symbol: str,
+        primary_strategy: str,
+        entry_price: float,
+        stop_loss_pct: float,
+        take_profit_pct: float
+    ):
+        """
+        Register position metadata for dynamic stop management
+
+        Args:
+            symbol: Trading symbol
+            primary_strategy: Primary strategy name (e.g., 'momentum', 'crypto')
+            entry_price: Entry price
+            stop_loss_pct: Strategy-specific stop-loss percentage
+            take_profit_pct: Strategy-specific take-profit percentage
+        """
+        self.position_metadata[symbol] = {
+            'primary_strategy': primary_strategy,
+            'entry_price': entry_price,
+            'stop_loss_pct': stop_loss_pct,
+            'take_profit_pct': take_profit_pct
+        }
+        self.logger.debug(
+            f"Registered position metadata for {symbol}: "
+            f"strategy={primary_strategy}, stop={stop_loss_pct}%, target={take_profit_pct}%"
+        )
+
+    def unregister_position(self, symbol: str):
+        """Remove position metadata when position is closed"""
+        if symbol in self.position_metadata:
+            del self.position_metadata[symbol]
+            self.logger.debug(f"Unregistered position metadata for {symbol}")
 
     def start(self):
         """Start the position monitoring loop"""
@@ -280,7 +318,18 @@ class PositionMonitor:
 
     def _check_position_stop_loss(self, position: Dict):
         """
-        Check if individual position has hit stop loss
+        ENHANCED: Dynamic stop-loss management with trailing behavior
+
+        Instead of just checking if stop hit, this method:
+        1. Calculates optimal stop price based on current profit
+        2. Replaces broker-level stop order when stop should move
+        3. Executes take-profit when target reached
+
+        Trailing Logic (Option B):
+        - Losing/flat: Maintain original strategy stop distance
+        - Profitable > 0.5%: Move stop to breakeven
+        - Profitable > 1.5%: Trail at 50% of current profit
+        - Profitable > take_profit_pct: Execute market sell
 
         Args:
             position: Position dict with symbol, qty, avg_entry_price, current_price
@@ -295,34 +344,236 @@ class PositionMonitor:
             return
 
         # Only check long positions (qty > 0) for now
-        # Short positions would need inverse logic
         if qty < 0:
             self.logger.debug(f"Skipping short position {symbol} - not implemented")
             return
 
-        # Get threshold from settings
-        threshold_bps = self.settings.get('thresholds', {}).get(
-            'trade_stop_loss_bps', 50.0
-        )
+        # Calculate current profit percentage
+        profit_pct = ((current_price - entry_price) / entry_price) * 100
 
-        # Skip if threshold is 0 or negative (disabled)
-        if threshold_bps <= 0:
+        # Get strategy-specific parameters for this position
+        metadata = self.position_metadata.get(symbol, {})
+        strategy_stop_loss_pct = metadata.get('stop_loss_pct', 0.8)  # Default 0.8%
+        strategy_take_profit_pct = metadata.get('take_profit_pct', 2.5)  # Default 2.5%
+
+        # Check take-profit first (manual execution via market order)
+        if profit_pct >= strategy_take_profit_pct:
+            self._execute_take_profit(
+                symbol, qty, entry_price, current_price, profit_pct, strategy_take_profit_pct
+            )
             return
 
-        # Calculate loss in basis points
-        loss_bps = ((entry_price - current_price) / entry_price) * 10000
+        # Calculate new stop price based on profit level (Option B logic)
+        new_stop_price = self._calculate_dynamic_stop_price(
+            entry_price, current_price, profit_pct, strategy_stop_loss_pct
+        )
 
-        # Log if approaching threshold (within 80%)
-        if loss_bps >= threshold_bps * 0.8 and loss_bps < threshold_bps:
+        # Find existing stop order for this symbol
+        existing_stop_order = self._find_stop_order(symbol)
+
+        if existing_stop_order:
+            old_stop_price = float(existing_stop_order.get('stop_price', 0))
+            old_order_id = existing_stop_order.get('id', '')
+
+            # Only replace if stop moved significantly (>0.1% difference)
+            price_diff_pct = abs(new_stop_price - old_stop_price) / old_stop_price * 100
+
+            if price_diff_pct >= 0.1:
+                self._replace_stop_order(
+                    symbol, qty, old_order_id, old_stop_price, new_stop_price, profit_pct
+                )
+        else:
+            # No stop order found - this shouldn't happen, but create one as safety
             self.logger.warning(
-                f"{symbol} approaching stop loss: {loss_bps:.1f} bps loss "
-                f"(threshold: {threshold_bps:.1f} bps)"
+                f"No stop order found for {symbol}, creating protective stop"
+            )
+            self._create_missing_stop_order(symbol, qty, new_stop_price)
+
+    def _calculate_dynamic_stop_price(
+        self,
+        entry_price: float,
+        current_price: float,
+        profit_pct: float,
+        strategy_stop_loss_pct: float
+    ) -> float:
+        """
+        Calculate dynamic stop price based on profit level (Option B logic)
+
+        Logic:
+        - Losing/flat (< 0.5% profit): Strategy's original stop distance
+        - Small profit (0.5% - 1.5%): Breakeven (entry price)
+        - Good profit (> 1.5%): Trail at 50% of current profit
+
+        Args:
+            entry_price: Original entry price
+            current_price: Current market price
+            profit_pct: Current profit percentage
+            strategy_stop_loss_pct: Strategy-specific stop-loss percentage
+
+        Returns:
+            New stop price
+        """
+        if profit_pct < 0.5:
+            # Losing or minimal profit: use strategy's original stop distance
+            stop_price = current_price * (1 - strategy_stop_loss_pct / 100)
+
+        elif profit_pct < 1.5:
+            # Small profit: move to breakeven
+            stop_price = entry_price
+
+        else:
+            # Good profit: trail at 50% of current profit
+            # If entry=$100, current=$105 (5% profit), stop at $102.50 (lock in 2.5%)
+            profit_per_share = current_price - entry_price
+            stop_price = entry_price + (profit_per_share * 0.5)
+
+        return stop_price
+
+    def _find_stop_order(self, symbol: str) -> Optional[Dict]:
+        """
+        Find existing stop order for a symbol
+
+        Returns:
+            Order dict if found, None otherwise
+        """
+        try:
+            # Get all open orders
+            open_orders = self.broker.list_orders(status='open')
+
+            # Find stop order for this symbol
+            for order in open_orders:
+                if (order.get('symbol') == symbol and
+                    order.get('type') == 'stop' and
+                    order.get('side') == 'sell'):
+                    return order
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error finding stop order for {symbol}: {e}")
+            return None
+
+    def _replace_stop_order(
+        self,
+        symbol: str,
+        qty: int,
+        old_order_id: str,
+        old_stop_price: float,
+        new_stop_price: float,
+        profit_pct: float
+    ):
+        """Replace existing stop order with new stop price"""
+        try:
+            # Determine stop movement direction
+            if new_stop_price > old_stop_price:
+                direction = "UP"
+                emoji = "📈"
+            else:
+                direction = "DOWN"
+                emoji = "📉"
+
+            self.logger.info(
+                f"{emoji} Trailing stop for {symbol} {direction}: "
+                f"${old_stop_price:.2f} -> ${new_stop_price:.2f} "
+                f"(P&L: {profit_pct:+.2f}%)"
             )
 
-        # Check if stop loss hit
-        if loss_bps >= threshold_bps:
-            self._execute_position_stop_loss(
-                position, loss_bps, threshold_bps
+            # Use broker's replace method
+            new_order = self.broker.replace_stop_loss_order(
+                old_order_id=old_order_id,
+                symbol=symbol,
+                qty=qty,
+                new_stop_price=new_stop_price,
+                time_in_force='gtc'
+            )
+
+            if not new_order:
+                self.logger.error(
+                    f"Failed to replace stop order for {symbol}, "
+                    f"position may be unprotected!"
+                )
+
+        except Exception as e:
+            self.logger.error(
+                f"Error replacing stop order for {symbol}: {e}",
+                exc_info=True
+            )
+
+    def _create_missing_stop_order(self, symbol: str, qty: int, stop_price: float):
+        """Create stop order if one is missing (safety net)"""
+        try:
+            self.logger.warning(
+                f"Creating missing stop order for {symbol} @ ${stop_price:.2f}"
+            )
+
+            stop_order = self.broker.place_stop_loss_order(
+                symbol=symbol,
+                qty=qty,
+                stop_price=stop_price,
+                time_in_force='gtc'
+            )
+
+            if stop_order:
+                self.logger.info(f"Safety stop order created for {symbol}")
+            else:
+                self.logger.error(
+                    f"CRITICAL: Failed to create safety stop for {symbol}! "
+                    f"Position is unprotected."
+                )
+
+        except Exception as e:
+            self.logger.error(
+                f"Error creating safety stop for {symbol}: {e}",
+                exc_info=True
+            )
+
+    def _execute_take_profit(
+        self,
+        symbol: str,
+        qty: int,
+        entry_price: float,
+        current_price: float,
+        profit_pct: float,
+        target_pct: float
+    ):
+        """Execute take-profit via market sell order"""
+        try:
+            profit_amount = (current_price - entry_price) * qty
+
+            self.logger.info(
+                f"🎯 TAKE PROFIT: {symbol} at {profit_pct:.2f}% (target: {target_pct:.2f}%)\n"
+                f"  Entry: ${entry_price:.2f}\n"
+                f"  Exit: ${current_price:.2f}\n"
+                f"  Profit: ${profit_amount:.2f}"
+            )
+
+            # Place market sell order
+            order = self.broker.place_order(
+                symbol=symbol,
+                side='sell',
+                qty=qty,
+                order_type='market',
+                time_in_force='day'
+            )
+
+            if order:
+                self.logger.info(f"✓ Take-profit order executed for {symbol}")
+
+                # Cancel any existing stop order (position closed)
+                existing_stop = self._find_stop_order(symbol)
+                if existing_stop:
+                    self.broker.cancel_order(existing_stop.get('id', ''))
+
+                # Unregister position metadata
+                self.unregister_position(symbol)
+
+            else:
+                self.logger.error(f"Failed to execute take-profit for {symbol}")
+
+        except Exception as e:
+            self.logger.error(
+                f"Error executing take-profit for {symbol}: {e}",
+                exc_info=True
             )
 
     def _execute_position_stop_loss(

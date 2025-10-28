@@ -334,6 +334,81 @@ class AlpacaBroker:
         result = self._make_request('DELETE', url)
         return result if result else []
 
+    def place_stop_loss_order(
+        self,
+        symbol: str,
+        qty: int,
+        stop_price: float,
+        time_in_force: str = 'gtc'
+    ) -> Optional[Dict]:
+        """
+        Place a stop-loss order for an existing position
+
+        Args:
+            symbol: Symbol to protect
+            qty: Quantity (must match position size)
+            stop_price: Stop-loss trigger price
+            time_in_force: 'gtc' (good til cancelled) or 'day'
+
+        Returns:
+            Order dict with order_id if successful
+        """
+        return self.place_order(
+            symbol=symbol,
+            qty=qty,
+            side='sell',
+            order_type='stop',
+            stop_price=stop_price,
+            time_in_force=time_in_force
+        )
+
+    def replace_stop_loss_order(
+        self,
+        old_order_id: str,
+        symbol: str,
+        qty: int,
+        new_stop_price: float,
+        time_in_force: str = 'gtc'
+    ) -> Optional[Dict]:
+        """
+        Replace an existing stop-loss order with a new stop price
+        Cancels old order and places new one atomically
+
+        Args:
+            old_order_id: ID of existing stop order to cancel
+            symbol: Symbol
+            qty: Quantity
+            new_stop_price: New stop-loss trigger price
+            time_in_force: 'gtc' or 'day'
+
+        Returns:
+            New order dict if successful, None if failed
+        """
+        # First, try to cancel the old order
+        if old_order_id:
+            cancel_success = self.cancel_order(old_order_id)
+            if not cancel_success:
+                self.logger.warning(
+                    f"Failed to cancel old stop order {old_order_id}, "
+                    f"attempting to place new order anyway"
+                )
+
+        # Place new stop-loss order
+        new_order = self.place_stop_loss_order(
+            symbol=symbol,
+            qty=qty,
+            stop_price=new_stop_price,
+            time_in_force=time_in_force
+        )
+
+        if new_order:
+            self.logger.info(
+                f"Replaced stop-loss for {symbol}: "
+                f"old_order={old_order_id}, new_stop=${new_stop_price:.2f}"
+            )
+
+        return new_order
+
 
 # Alias for backward compatibility
 BrokerAlpaca = AlpacaBroker
