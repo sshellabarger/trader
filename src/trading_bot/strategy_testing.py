@@ -25,6 +25,39 @@ from .news import NewsArticle
 logger = logging.getLogger(__name__)
 
 
+def convert_earnings_calendar(earnings_dates: Dict[str, str]) -> Dict[str, Dict]:
+    """
+    Convert earnings calendar from {symbol: 'YYYY-MM-DD'} format
+    to {symbol: {'days_until': N, 'date': 'YYYY-MM-DD'}} format
+
+    Args:
+        earnings_dates: Dictionary mapping symbols to date strings
+
+    Returns:
+        Dictionary mapping symbols to earnings info dicts
+    """
+    result = {}
+    today = datetime.now().date()
+
+    for symbol, date_str in earnings_dates.items():
+        try:
+            # Parse the date string
+            earnings_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+
+            # Calculate days until earnings
+            days_until = (earnings_date - today).days
+
+            result[symbol] = {
+                'days_until': days_until,
+                'date': date_str
+            }
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Error parsing earnings date for {symbol}: {date_str} - {e}")
+            continue
+
+    return result
+
+
 class StrategyType(Enum):
     """Available strategy types for testing"""
     MOMENTUM = "momentum"
@@ -356,7 +389,9 @@ class StrategyBacktester:
                 score, details = strategy_func(volume, avg_volume)
 
             elif strategy_type == StrategyType.EARNINGS:
-                earnings_calendar = kwargs.get('earnings_calendar', {})
+                earnings_calendar_raw = kwargs.get('earnings_calendar', {})
+                # Convert from {symbol: 'YYYY-MM-DD'} to {symbol: {'days_until': N}}
+                earnings_calendar = convert_earnings_calendar(earnings_calendar_raw) if earnings_calendar_raw else {}
                 days_limit = self.config.strategy_params.get('earnings_days_limit', 7)
                 score, details = strategy_func(symbol, earnings_calendar, days_limit)
 
