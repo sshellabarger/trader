@@ -28,12 +28,9 @@ strategies = {
 }
 
 thresholds = {
-    "enter": 0.62,
-    "exit": 0.45,
     "min_spread_bps": 25.0,
     "trade_stop_loss_bps": 50.0,
-    "daily_stop_loss_pct": 2.0,
-    "take_profit_pct": 2.0
+    "daily_stop_loss_pct": 2.0
 }
 
 news = {
