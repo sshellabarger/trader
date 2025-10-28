@@ -116,7 +116,7 @@ class StrategyManager:
         # Strategy toggles
         self.strategies_enabled = settings.get('strategies', {})
 
-        # Base strategy weights
+        # Base strategy weights (DEPRECATED - kept for backward compatibility)
         self.base_weights = {
             'momentum': 0.25,
             'mean_reversion': 0.20,
@@ -126,6 +126,19 @@ class StrategyManager:
             'longterm_trend': 0.15,
             'longterm_momentum': 0.12,
             'crypto': 0.05
+        }
+
+        # Fixed strategy confidence values (intrinsic reliability)
+        # These represent how much we trust each strategy based on historical performance
+        self.strategy_confidence = {
+            'momentum': 0.75,        # High reliability in trending markets
+            'mean_reversion': 0.65,  # Good in ranging markets
+            'news': 0.70,            # High impact when present
+            'volume': 0.70,          # Strong indicator of interest
+            'earnings': 0.75,        # High reliability near earnings
+            'longterm_trend': 0.65,  # Good for sustained moves
+            'longterm_momentum': 0.65,  # Good for sustained moves
+            'crypto': 0.60           # Specialized, volatile
         }
 
         # Regime-specific strategy preferences
@@ -427,7 +440,7 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='momentum',
                         score=score,
-                        confidence=weights.get('momentum', 0.25),
+                        confidence=self.strategy_confidence.get('momentum', 0.75),
                         regime_match=regime_match,
                         details=details
                     ))
@@ -439,7 +452,7 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='mean_reversion',
                         score=score,
-                        confidence=weights.get('mean_reversion', 0.20),
+                        confidence=self.strategy_confidence.get('mean_reversion', 0.65),
                         regime_match=regime_match,
                         details=details
                     ))
@@ -450,7 +463,7 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='news',
                         score=score,
-                        confidence=weights.get('news', 0.10),
+                        confidence=self.strategy_confidence.get('news', 0.70),
                         regime_match=True,
                         details=details
                     ))
@@ -461,7 +474,7 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='volume',
                         score=score,
-                        confidence=weights.get('volume', 0.08),
+                        confidence=self.strategy_confidence.get('volume', 0.70),
                         regime_match=True,
                         details=details
                     ))
@@ -472,7 +485,7 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='earnings',
                         score=score,
-                        confidence=weights.get('earnings', 0.05),
+                        confidence=self.strategy_confidence.get('earnings', 0.75),
                         regime_match=True,
                         details=details
                     ))
@@ -484,7 +497,7 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='longterm_trend',
                         score=score,
-                        confidence=weights.get('longterm_trend', 0.15),
+                        confidence=self.strategy_confidence.get('longterm_trend', 0.65),
                         regime_match=regime_match,
                         details=details
                     ))
@@ -496,7 +509,7 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='longterm_momentum',
                         score=score,
-                        confidence=weights.get('longterm_momentum', 0.12),
+                        confidence=self.strategy_confidence.get('longterm_momentum', 0.65),
                         regime_match=regime_match,
                         details=details
                     ))
@@ -507,42 +520,58 @@ class StrategyManager:
                     signals.append(SignalResult(
                         strategy_name='crypto',
                         score=score,
-                        confidence=weights.get('crypto', 0.05),
+                        confidence=self.strategy_confidence.get('crypto', 0.60),
                         regime_match=True,
                         details=details
                     ))
 
-                # Calculate weighted final score
+                # STAGE 1: Filter to regime-matching strategies only
+                matching_signals = [s for s in signals if s.regime_match]
+
+                # Track all signals for metadata
+                all_active_strategies = [s.strategy_name for s in signals if s.score > 0.3]
+
+                # Need at least some matching strategies to proceed
+                if not matching_signals:
+                    continue
+
+                # STAGE 2: Weight by fixed intrinsic confidence
                 total_weight = 0
                 weighted_sum = 0
-                active_strategies = []
+                matching_active_strategies = []
 
-                for signal in signals:
-                    weight = signal.confidence
-                    if not signal.regime_match:
-                        weight *= 0.5
+                for signal in matching_signals:
+                    # Use fixed confidence based on strategy reliability
+                    weight = self.strategy_confidence.get(signal.strategy_name, 0.5)
 
                     weighted_sum += signal.score * weight
                     total_weight += weight
 
                     if signal.score > 0.3:
-                        active_strategies.append(signal.strategy_name)
+                        matching_active_strategies.append(signal.strategy_name)
 
                 final_score = weighted_sum / total_weight if total_weight > 0 else 0
-                confidence = statistics.mean([s.confidence for s in signals]) if signals else 0
+
+                # Confidence is mean of fixed confidence values for matching strategies
+                confidence = statistics.mean([
+                    self.strategy_confidence.get(s.strategy_name, 0.5)
+                    for s in matching_signals
+                ]) if matching_signals else 0
 
                 if final_score >= min_score:
                     candidates.append(CombinedSignal(
                         symbol=symbol,
                         final_score=final_score,
                         confidence=confidence,
-                        active_strategies=active_strategies,
+                        active_strategies=matching_active_strategies,
                         regime=regime,
                         signals=signals,
                         metadata={
                             'regime_details': regime_details,
                             'current_price': current_price,
-                            'weights_used': weights
+                            'matching_strategies_count': len(matching_signals),
+                            'total_strategies_count': len(signals),
+                            'non_matching_strategies': [s.strategy_name for s in signals if not s.regime_match]
                         },
                         is_crypto=is_crypto
                     ))
@@ -564,6 +593,7 @@ class StrategyManager:
         """
         Determine if signal is strong enough for entry.
         Uses strategy-specific configuration if provided.
+        Only considers regime-matching strategies in evaluation.
         """
         # Use strategy-specific threshold if available
         if strategy_config:
@@ -572,11 +602,13 @@ class StrategyManager:
         if signal.final_score < entry_threshold:
             return False, f"Score {signal.final_score:.2f} < threshold {entry_threshold}"
 
+        # active_strategies now only includes regime-matching strategies
         if len(signal.active_strategies) < 2:
-            return False, f"Only {len(signal.active_strategies)} active strategies"
+            return False, f"Only {len(signal.active_strategies)} matching active strategies"
 
+        # Confidence is now calculated from matching strategies only
         if signal.confidence < 0.3:
-            return False, f"Low confidence {signal.confidence:.2f}"
+            return False, f"Low confidence {signal.confidence:.2f} (from matching strategies)"
 
         if signal.regime == MarketRegime.HIGH_VOLATILITY:
             # Crypto can handle high volatility better
