@@ -90,6 +90,8 @@ except ImportError:
             return {}
 
 from .universe import load_universe
+from .strategy_configs import get_strategy_config, STRATEGY_CONFIGS
+from .strategy_testing import StrategyType
 
 # Import enhanced modules
 try:
@@ -225,6 +227,42 @@ class Trader:
         if self.simulation_mode:
             self.logger.warning("⚠️  SIMULATION MODE ENABLED - Orders will be logged but NOT executed")
 
+    def _get_primary_strategy(self, candidate) -> StrategyType:
+        """
+        Determine the primary strategy for a candidate based on active strategies.
+        Returns the strategy with the highest score from the candidate's signals.
+        """
+        # Map strategy names to StrategyType enum
+        strategy_map = {
+            'momentum': StrategyType.MOMENTUM,
+            'mean_reversion': StrategyType.MEAN_REVERSION,
+            'news': StrategyType.NEWS,
+            'volume': StrategyType.VOLUME,
+            'earnings': StrategyType.EARNINGS,
+            'longterm_trend': StrategyType.LONGTERM_TREND,
+            'longterm_momentum': StrategyType.LONGTERM_MOMENTUM,
+            'crypto': StrategyType.CRYPTO,
+        }
+
+        # If candidate has signals, find the highest scoring strategy
+        if hasattr(candidate, 'signals') and candidate.signals:
+            best_signal = max(candidate.signals, key=lambda s: s.score * s.confidence)
+            strategy_name = best_signal.strategy_name
+            return strategy_map.get(strategy_name, StrategyType.MOMENTUM)
+
+        # Fallback: check active_strategies list
+        if hasattr(candidate, 'active_strategies') and candidate.active_strategies:
+            first_strategy = candidate.active_strategies[0]
+            return strategy_map.get(first_strategy, StrategyType.MOMENTUM)
+
+        # Check if crypto
+        symbol = candidate.symbol if hasattr(candidate, 'symbol') else candidate.get('symbol', '')
+        if '/' in symbol or symbol.endswith('USD'):
+            return StrategyType.CRYPTO
+
+        # Default to momentum
+        return StrategyType.MOMENTUM
+
     def initialize(self):
         """Initialize engine and load data"""
         self.logger.info("Initializing trading engine...")
@@ -323,6 +361,7 @@ class Trader:
         """
         ✅ ENHANCED: Check existing positions for exit signals
         Now includes take profit, time-based exits, and trailing stops
+        Uses strategy-specific take profit thresholds
         """
         try:
             positions = None
@@ -334,8 +373,8 @@ class Trader:
             if not positions:
                 return
 
-            # Get take profit threshold
-            take_profit_pct = self.settings.get('thresholds', {}).get('take_profit_pct', 2.0)
+            # Default take profit threshold (fallback)
+            default_take_profit_pct = self.settings.get('thresholds', {}).get('take_profit_pct', 2.0)
 
             for position in positions:
                 symbol = position.get('symbol')
@@ -345,6 +384,16 @@ class Trader:
 
                 if qty == 0 or current_price <= 0:
                     continue
+
+                # Determine strategy for this position
+                # Try to get from state/metadata, otherwise infer from symbol
+                position_strategy = StrategyType.MOMENTUM  # Default
+                if '/' in symbol or symbol.endswith('USD'):
+                    position_strategy = StrategyType.CRYPTO
+
+                # Get strategy-specific config
+                strategy_config = get_strategy_config(position_strategy)
+                take_profit_pct = strategy_config.get('take_profit_pct', default_take_profit_pct)
 
                 # Check take profit
                 if unrealized_plpc >= take_profit_pct:
@@ -430,9 +479,6 @@ class Trader:
                     self.logger.warning(f"Risk violations present: {metrics.violations}")
                     return
 
-            # Get entry threshold
-            entry_threshold = self.settings.get('thresholds', {}).get('enter', 0.62)
-
             # Look for entry opportunities in top candidates
             max_new_positions = 3  # Maximum new positions per cycle
             new_positions_opened = 0
@@ -449,11 +495,17 @@ class Trader:
                 if any(p.get('symbol') == symbol for p in positions):
                     continue
 
+                # Determine primary strategy and get its config
+                primary_strategy = self._get_primary_strategy(candidate)
+                strategy_config = get_strategy_config(primary_strategy)
+                entry_threshold = strategy_config.get('entry_threshold', 0.62)
+
                 # Check if signal is strong enough
                 if self.strategy_manager:
                     should_enter, reason = self.strategy_manager.get_entry_signal(
                         candidate,
-                        entry_threshold=entry_threshold
+                        entry_threshold=entry_threshold,
+                        strategy_config=strategy_config
                     )
 
                     if not should_enter:
@@ -476,8 +528,10 @@ class Trader:
                     self.logger.debug(f"Invalid price for {symbol}: {current_price}")
                     continue
 
-                # Calculate stop loss
-                stop_loss_bps = self.settings.get('thresholds', {}).get('trade_stop_loss_bps', 50.0)
+                # Calculate stop loss using strategy-specific config
+                # Convert stop_loss_pct (percentage) to basis points for compatibility
+                stop_loss_pct = strategy_config.get('stop_loss_pct', 0.5)
+                stop_loss_bps = stop_loss_pct * 100  # Convert % to basis points
 
                 if self.strategy_manager and hasattr(candidate, 'regime'):
                     is_crypto = getattr(candidate, 'is_crypto', False)
@@ -485,10 +539,11 @@ class Trader:
                         current_price,
                         candidate.regime,
                         stop_loss_bps,
-                        is_crypto
+                        is_crypto,
+                        strategy_config=strategy_config
                     )
                 else:
-                    stop_loss_price = current_price * (1 - stop_loss_bps / 10000)
+                    stop_loss_price = current_price * (1 - stop_loss_pct / 100)
 
                 # Calculate position size
                 qty = 0
@@ -542,7 +597,7 @@ class Trader:
                 self.logger.info(
                     f"ENTRY SIGNAL: {symbol} score={score:.3f}, qty={qty}, "
                     f"price=${current_price:.2f}, stop=${stop_loss_price:.2f}, "
-                    f"strategies={strategies}"
+                    f"primary_strategy={primary_strategy.value}, strategies={strategies}"
                 )
 
                 if self.simulation_mode:
@@ -576,8 +631,10 @@ class Trader:
                         details=json.dumps({
                             'score': score,
                             'strategies': strategies,
+                            'primary_strategy': primary_strategy.value,
                             'regime': regime,
                             'stop_loss': stop_loss_price,
+                            'take_profit_pct': strategy_config.get('take_profit_pct', 2.0),
                             'order_id': order.get('id', '')
                         })
                     )
