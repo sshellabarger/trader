@@ -21,6 +21,7 @@ strategies = {
     "momentum": True,
     "mean_reversion": True,
     "news": True,
+    "volume": True,
     "earnings": True,
     "longterm_trend": True,
     "longterm_momentum": True,

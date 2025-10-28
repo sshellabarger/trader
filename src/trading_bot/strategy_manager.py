@@ -456,14 +456,15 @@ class StrategyManager:
                     ))
 
                 # Volume signal
-                score, details = self.score_volume(volume, avg_volume)
-                signals.append(SignalResult(
-                    strategy_name='volume',
-                    score=score,
-                    confidence=weights.get('volume', 0.08),
-                    regime_match=True,
-                    details=details
-                ))
+                if self.strategies_enabled.get('volume', True):
+                    score, details = self.score_volume(volume, avg_volume)
+                    signals.append(SignalResult(
+                        strategy_name='volume',
+                        score=score,
+                        confidence=weights.get('volume', 0.08),
+                        regime_match=True,
+                        details=details
+                    ))
 
                 # Earnings signal
                 if self.strategies_enabled.get('earnings', False):
