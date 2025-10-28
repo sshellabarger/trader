@@ -151,7 +151,21 @@ class DetailedStrategyMetrics:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
         data = asdict(self)
-        return data
+
+        # Recursively convert enums to strings for JSON serialization
+        def convert_enums(obj):
+            if isinstance(obj, dict):
+                return {k: convert_enums(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_enums(item) for item in obj]
+            elif isinstance(obj, tuple):
+                return tuple(convert_enums(item) for item in obj)
+            elif hasattr(obj, 'value'):  # Enum
+                return obj.value
+            else:
+                return obj
+
+        return convert_enums(data)
 
     def to_json(self, filepath: str):
         """Export metrics to JSON file"""
