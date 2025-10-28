@@ -45,10 +45,20 @@ python test_strategy.py test momentum \
   --stop-loss 0.3 \
   --take-profit 2.5
 
-# Test specific symbols
+# Test specific symbols (command line)
 python test_strategy.py test news \
   --symbols AAPL,MSFT,GOOGL \
   --duration 30
+
+# Test with symbols from file
+python test_strategy.py test momentum \
+  --symbols-file examples/symbols.txt \
+  --duration 60
+
+# Test with main bot's watchlist
+python test_strategy.py test momentum \
+  --use-watchlist \
+  --duration 60
 ```
 
 ### Test All Strategies
@@ -79,6 +89,101 @@ python test_strategy.py optimize mean_reversion --top-n 5
 ```bash
 # Compare multiple test results
 python test_strategy.py compare test_results/momentum_*.json test_results/mean_reversion_*.json
+```
+
+## Symbol Management
+
+The testing framework provides flexible options for specifying which symbols to test:
+
+### Option 1: Command Line (--symbols)
+
+Pass symbols directly as a comma-separated list:
+
+```bash
+python test_strategy.py test momentum --symbols AAPL,MSFT,GOOGL,AMZN
+```
+
+### Option 2: From File (--symbols-file)
+
+Create a file with symbols (text or CSV format):
+
+**Text format** (examples/symbols.txt):
+```
+# Comments start with #
+AAPL
+MSFT
+GOOGL
+AMZN
+TSLA
+```
+
+**CSV format** (examples/symbols.csv):
+```
+SYMBOL
+AAPL
+MSFT
+GOOGL
+```
+
+Then use it:
+```bash
+python test_strategy.py test momentum --symbols-file examples/symbols.txt
+python test_strategy.py test momentum --symbols-file my_watchlist.csv
+```
+
+### Option 3: Main Bot's Watchlist (--use-watchlist)
+
+Use the same symbols your main trading bot uses (from `DAYTRADER_UNIVERSE` env var):
+
+```bash
+# Use your bot's watchlist
+python test_strategy.py test momentum --use-watchlist
+
+# Include crypto symbols too
+python test_strategy.py test crypto --use-watchlist --include-crypto
+```
+
+The watchlist is loaded from:
+1. `DAYTRADER_UNIVERSE` environment variable (file path or comma-separated)
+2. Falls back to default list if not set
+
+### Option 4: Default Symbols
+
+If you don't specify any option, these defaults are used:
+```
+AAPL, MSFT, GOOGL, AMZN, TSLA, NVDA, META, NFLX
+```
+
+### Priority Order
+
+When multiple options are provided, the framework uses this priority:
+1. `--symbols-file` (highest priority)
+2. `--symbols`
+3. `--use-watchlist`
+4. Default list (lowest priority)
+
+### Examples
+
+```bash
+# Test with file
+python test_strategy.py test momentum \
+  --duration 30 \
+  --symbols-file my_stocks.txt
+
+# Test with watchlist
+python test_strategy.py test-all \
+  --duration 60 \
+  --use-watchlist
+
+# Optimize with specific symbols
+python test_strategy.py optimize mean_reversion \
+  --duration 20 \
+  --symbols SPY,QQQ,IWM
+
+# Compare file vs watchlist
+python test_strategy.py test momentum --symbols-file tech_stocks.txt --duration 30
+python test_strategy.py test momentum --use-watchlist --duration 30
+python test_strategy.py compare test_results/*.json
 ```
 
 ## Available Strategies

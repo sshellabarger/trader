@@ -1,0 +1,24 @@
+# Example symbols file for strategy testing
+# Lines starting with # are comments
+# Symbols can be one per line or comma-separated
+
+# Tech stocks
+AAPL
+MSFT
+GOOGL
+AMZN
+META
+NVDA
+AMD
+INTC
+
+# Financial stocks
+JPM
+BAC
+GS
+WFC
+
+# ETFs
+SPY
+QQQ
+IWM
