@@ -359,51 +359,22 @@ class Trader:
 
     def check_exits(self):
         """
-        ✅ ENHANCED: Check existing positions for exit signals
-        Now includes take profit, time-based exits, and trailing stops
-        Uses strategy-specific take profit thresholds
+        ✅ ENHANCED: Exit checking now handled by PositionMonitor
+
+        PositionMonitor now handles:
+        - Dynamic trailing stop-loss orders (broker-level protection)
+        - Take-profit execution via market orders
+        - Daily portfolio stop-loss
+
+        This method is kept for backward compatibility but logic moved to
+        position_monitor.py for better risk management
         """
-        try:
-            positions = None
-            if hasattr(self.broker, 'list_positions'):
-                positions = self.broker.list_positions()
-            elif hasattr(self.broker, 'get_positions'):
-                positions = self.broker.get_positions()
-
-            if not positions:
-                return
-
-            for position in positions:
-                symbol = position.get('symbol')
-                qty = int(position.get('qty', 0))
-                current_price = float(position.get('current_price', 0))
-                unrealized_plpc = float(position.get('unrealized_plpc', 0))
-
-                if qty == 0 or current_price <= 0:
-                    continue
-
-                # Determine strategy for this position
-                # Try to get from state/metadata, otherwise infer from symbol
-                position_strategy = StrategyType.MOMENTUM  # Default
-                if '/' in symbol or symbol.endswith('USD'):
-                    position_strategy = StrategyType.CRYPTO
-
-                # Get strategy-specific config
-                strategy_config = get_strategy_config(position_strategy)
-                # All strategies now have take_profit_pct defined in strategy_configs.py
-                take_profit_pct = strategy_config.get('take_profit_pct', 2.0)
-
-                # Check take profit
-                if unrealized_plpc >= take_profit_pct:
-                    self.logger.info(
-                        f"TAKE PROFIT: {symbol} at {unrealized_plpc:.2f}% "
-                        f"(target: {take_profit_pct}%)"
-                    )
-                    self._close_position(symbol, qty, current_price, "take_profit")
-                    continue
-
-        except Exception as e:
-            self.logger.error(f"Error checking exits: {e}", exc_info=True)
+        # Exit logic now handled by PositionMonitor background thread
+        # which provides:
+        # - Broker-level stop orders (instant execution, works if bot crashes)
+        # - Dynamic trailing stops (lock in profits as trade becomes profitable)
+        # - Take-profit via market orders (flexible execution)
+        pass
 
     def _close_position(self, symbol: str, qty: int, current_price: float, reason: str):
         """Close a position with proper logging"""
@@ -620,8 +591,31 @@ class Trader:
                     if self.risk_manager:
                         self.risk_manager.increment_trade_count()
 
+                    # Place protective stop-loss order
+                    stop_order = self.broker.place_stop_loss_order(
+                        symbol=symbol,
+                        qty=qty,
+                        stop_price=stop_loss_price,
+                        time_in_force='gtc'  # Good til cancelled
+                    )
+
+                    stop_order_id = None
+                    if stop_order:
+                        stop_order_id = stop_order.get('id', '')
+                        self.logger.info(
+                            f"✓ Stop-loss placed: {symbol} @ ${stop_loss_price:.2f} "
+                            f"(order_id: {stop_order_id})"
+                        )
+                    else:
+                        self.logger.error(
+                            f"⚠ WARNING: Failed to place stop-loss for {symbol}! "
+                            f"Position is unprotected."
+                        )
+
                     # Log the decision
                     regime = candidate.regime.value if hasattr(candidate, 'regime') and hasattr(candidate.regime, 'value') else 'unknown'
+
+                    take_profit_pct = strategy_config.get('take_profit_pct', 2.0)
 
                     self.state.add_event(
                         'entry',
@@ -632,10 +626,22 @@ class Trader:
                             'primary_strategy': primary_strategy.value,
                             'regime': regime,
                             'stop_loss': stop_loss_price,
-                            'take_profit_pct': strategy_config.get('take_profit_pct', 2.0),
+                            'stop_order_id': stop_order_id,
+                            'take_profit_pct': take_profit_pct,
                             'order_id': order.get('id', '')
                         })
                     )
+
+                    # Register position metadata with position monitor for dynamic stop management
+                    if self.position_monitor:
+                        self.position_monitor.register_position(
+                            symbol=symbol,
+                            primary_strategy=primary_strategy.value,
+                            entry_price=current_price,
+                            stop_loss_pct=stop_loss_pct,
+                            take_profit_pct=take_profit_pct
+                        )
+
                 else:
                     self.logger.error(f"Failed to place order for {symbol}")
 
