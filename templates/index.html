@@ -1237,6 +1237,18 @@
                                 <span>🪙 Crypto Strategy</span>
                             </label>
                         </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-forex-strategy" ${settings.strategies?.forex ? 'checked' : ''}>
+                                <span>💱 Forex Strategy</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-etf-strategy" ${settings.strategies?.etf ? 'checked' : ''}>
+                                <span>📊 ETF Strategy</span>
+                            </label>
+                        </div>
                     </div>
 
                     <div class="setting-group">
@@ -1253,6 +1265,157 @@
                                    value="${(settings.crypto?.universe || ['BTC/USD', 'ETH/USD']).join(', ')}"
                                    placeholder="BTC/USD, ETH/USD, SOL/USD">
                             <small style="color: var(--text-secondary);">Separate with commas</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>RSI Period</label>
+                            <input type="number" id="setting-crypto-rsi-period" value="${settings.crypto?.rsi_period || 14}" step="1">
+                            <small style="color: var(--text-secondary);">Relative Strength Index period</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Bollinger Bands Period</label>
+                            <input type="number" id="setting-crypto-bb-period" value="${settings.crypto?.bb_period || 20}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Bollinger Bands Std Dev</label>
+                            <input type="number" id="setting-crypto-bb-std" value="${settings.crypto?.bb_std || 2}" step="0.5">
+                        </div>
+                        <div class="setting-item">
+                            <label>Volume MA Period</label>
+                            <input type="number" id="setting-crypto-volume-ma-period" value="${settings.crypto?.volume_ma_period || 20}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>MACD Fast Period</label>
+                            <input type="number" id="setting-crypto-macd-fast" value="${settings.crypto?.macd_fast || 12}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>MACD Slow Period</label>
+                            <input type="number" id="setting-crypto-macd-slow" value="${settings.crypto?.macd_slow || 26}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>MACD Signal Period</label>
+                            <input type="number" id="setting-crypto-macd-signal" value="${settings.crypto?.macd_signal || 9}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Min 24h Volume (USD)</label>
+                            <input type="number" id="setting-crypto-min-volume-24h" value="${settings.crypto?.min_volume_24h || 1000000}" step="100000">
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>💱 Forex Settings</h3>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-forex-enabled" ${settings.forex?.enabled ? 'checked' : ''}>
+                                <span>Enable Forex Trading (24/5)</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label>Forex Pairs (comma-separated)</label>
+                            <input type="text" id="setting-forex-universe"
+                                   value="${(settings.forex?.universe || ['EUR/USD', 'GBP/USD', 'USD/JPY']).join(', ')}"
+                                   placeholder="EUR/USD, GBP/USD, USD/JPY">
+                            <small style="color: var(--text-secondary);">Separate with commas</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>RSI Period</label>
+                            <input type="number" id="setting-forex-rsi-period" value="${settings.forex?.rsi_period || 14}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>ATR Period</label>
+                            <input type="number" id="setting-forex-atr-period" value="${settings.forex?.atr_period || 14}" step="1">
+                            <small style="color: var(--text-secondary);">Average True Range period</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>MACD Fast Period</label>
+                            <input type="number" id="setting-forex-macd-fast" value="${settings.forex?.macd_fast || 12}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>MACD Slow Period</label>
+                            <input type="number" id="setting-forex-macd-slow" value="${settings.forex?.macd_slow || 26}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>MACD Signal Period</label>
+                            <input type="number" id="setting-forex-macd-signal" value="${settings.forex?.macd_signal || 9}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Short EMA Period</label>
+                            <input type="number" id="setting-forex-ema-short" value="${settings.forex?.ema_short || 12}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Long EMA Period</label>
+                            <input type="number" id="setting-forex-ema-long" value="${settings.forex?.ema_long || 26}" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Min Daily Volume</label>
+                            <input type="number" id="setting-forex-min-daily-volume" value="${settings.forex?.min_daily_volume || 100000}" step="10000">
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Spread (pips)</label>
+                            <input type="number" id="setting-forex-max-spread-pips" value="${settings.forex?.max_spread_pips || 5}" step="0.5">
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>📊 ETF Settings</h3>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-etf-enabled" ${settings.etf?.enabled ? 'checked' : ''}>
+                                <span>Enable ETF Trading</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label>ETF Symbols (comma-separated)</label>
+                            <input type="text" id="setting-etf-universe"
+                                   value="${(settings.etf?.universe || ['SPY', 'QQQ', 'IWM']).join(', ')}"
+                                   placeholder="SPY, QQQ, IWM, XLE, XLF">
+                            <small style="color: var(--text-secondary);">Separate with commas</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Min Daily Volume</label>
+                            <input type="number" id="setting-etf-min-daily-volume" value="${settings.etf?.min_daily_volume || 1000000}" step="100000">
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Spread (BPS)</label>
+                            <input type="number" id="setting-etf-max-spread-bps" value="${settings.etf?.max_spread_bps || 10}" step="1">
+                            <small style="color: var(--text-secondary);">Basis points (10 BPS = 0.10%)</small>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-etf-sector-rotation" ${settings.etf?.sector_rotation !== false ? 'checked' : ''}>
+                                <span>Enable Sector Rotation Signals</span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-etf-prefer-high-aum" ${settings.etf?.prefer_high_aum !== false ? 'checked' : ''}>
+                                <span>Prefer High AUM ETFs</span>
+                            </label>
+                            <small style="color: var(--text-secondary);">Assets Under Management</small>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3>🧪 Backtest & Simulation</h3>
+                        <div class="setting-item">
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-simulation-mode" ${settings.backtest?.simulation_mode ? 'checked' : ''}>
+                                <span>⚠️ Simulation Mode (Log Only, No Real Trades)</span>
+                            </label>
+                            <small style="color: var(--warning);">When enabled, orders are logged but not executed</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Initial Capital</label>
+                            <input type="number" id="setting-initial-capital" value="${settings.backtest?.initial_capital || 100000}" step="1000">
+                            <small style="color: var(--text-secondary);">For backtesting simulations</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Commission Per Trade ($)</label>
+                            <input type="number" id="setting-commission-per-trade" value="${settings.backtest?.commission_per_trade || 1.0}" step="0.1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Slippage (BPS)</label>
+                            <input type="number" id="setting-slippage-bps" value="${settings.backtest?.slippage_bps || 2.0}" step="0.5">
+                            <small style="color: var(--text-secondary);">Expected slippage in basis points</small>
                         </div>
                     </div>
 
@@ -1520,6 +1683,14 @@
             const cryptoUniverseStr = document.getElementById('setting-crypto-universe').value;
             const cryptoUniverse = cryptoUniverseStr.split(',').map(s => s.trim()).filter(s => s);
 
+            // Parse forex universe from comma-separated string
+            const forexUniverseStr = document.getElementById('setting-forex-universe').value;
+            const forexUniverse = forexUniverseStr.split(',').map(s => s.trim()).filter(s => s);
+
+            // Parse ETF universe from comma-separated string
+            const etfUniverseStr = document.getElementById('setting-etf-universe').value;
+            const etfUniverse = etfUniverseStr.split(',').map(s => s.trim()).filter(s => s);
+
             const settings = {
                 thresholds: {
                     trade_stop_loss_bps: parseFloat(document.getElementById('setting-stop-loss').value),
@@ -1545,11 +1716,48 @@
                     earnings: document.getElementById('setting-earnings').checked,
                     longterm_trend: document.getElementById('setting-longterm-trend').checked,
                     longterm_momentum: document.getElementById('setting-longterm-momentum').checked,
-                    crypto: document.getElementById('setting-crypto-strategy').checked
+                    crypto: document.getElementById('setting-crypto-strategy').checked,
+                    forex: document.getElementById('setting-forex-strategy').checked,
+                    etf: document.getElementById('setting-etf-strategy').checked
                 },
                 crypto: {
                     enabled: document.getElementById('setting-crypto-enabled').checked,
-                    universe: cryptoUniverse
+                    universe: cryptoUniverse,
+                    rsi_period: parseInt(document.getElementById('setting-crypto-rsi-period').value),
+                    bb_period: parseInt(document.getElementById('setting-crypto-bb-period').value),
+                    bb_std: parseFloat(document.getElementById('setting-crypto-bb-std').value),
+                    volume_ma_period: parseInt(document.getElementById('setting-crypto-volume-ma-period').value),
+                    macd_fast: parseInt(document.getElementById('setting-crypto-macd-fast').value),
+                    macd_slow: parseInt(document.getElementById('setting-crypto-macd-slow').value),
+                    macd_signal: parseInt(document.getElementById('setting-crypto-macd-signal').value),
+                    min_volume_24h: parseInt(document.getElementById('setting-crypto-min-volume-24h').value)
+                },
+                forex: {
+                    enabled: document.getElementById('setting-forex-enabled').checked,
+                    universe: forexUniverse,
+                    rsi_period: parseInt(document.getElementById('setting-forex-rsi-period').value),
+                    atr_period: parseInt(document.getElementById('setting-forex-atr-period').value),
+                    macd_fast: parseInt(document.getElementById('setting-forex-macd-fast').value),
+                    macd_slow: parseInt(document.getElementById('setting-forex-macd-slow').value),
+                    macd_signal: parseInt(document.getElementById('setting-forex-macd-signal').value),
+                    ema_short: parseInt(document.getElementById('setting-forex-ema-short').value),
+                    ema_long: parseInt(document.getElementById('setting-forex-ema-long').value),
+                    min_daily_volume: parseInt(document.getElementById('setting-forex-min-daily-volume').value),
+                    max_spread_pips: parseFloat(document.getElementById('setting-forex-max-spread-pips').value)
+                },
+                etf: {
+                    enabled: document.getElementById('setting-etf-enabled').checked,
+                    universe: etfUniverse,
+                    min_daily_volume: parseInt(document.getElementById('setting-etf-min-daily-volume').value),
+                    max_spread_bps: parseInt(document.getElementById('setting-etf-max-spread-bps').value),
+                    sector_rotation: document.getElementById('setting-etf-sector-rotation').checked,
+                    prefer_high_aum: document.getElementById('setting-etf-prefer-high-aum').checked
+                },
+                backtest: {
+                    simulation_mode: document.getElementById('setting-simulation-mode').checked,
+                    initial_capital: parseFloat(document.getElementById('setting-initial-capital').value),
+                    commission_per_trade: parseFloat(document.getElementById('setting-commission-per-trade').value),
+                    slippage_bps: parseFloat(document.getElementById('setting-slippage-bps').value)
                 },
                 scheduling: {
                     candidate_refresh_min: parseInt(document.getElementById('setting-candidate-refresh').value),

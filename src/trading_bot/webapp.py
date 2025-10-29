@@ -72,7 +72,10 @@ class SettingsUpdate(BaseModel):
     scheduling: Optional[Dict[str, Any]] = None
     news: Optional[Dict[str, Any]] = None
     crypto: Optional[Dict[str, Any]] = None
+    forex: Optional[Dict[str, Any]] = None
+    etf: Optional[Dict[str, Any]] = None
     data: Optional[Dict[str, Any]] = None
+    backtest: Optional[Dict[str, Any]] = None
 
 
 # UI Routes
