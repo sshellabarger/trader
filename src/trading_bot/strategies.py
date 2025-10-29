@@ -293,45 +293,126 @@ def score_longterm_momentum(current_price: float, open_price: float,
     return score, details
 
 
-def score_crypto(symbol: str, current_price: float, open_price: float, 
-                prev_close: float, high: float, low: float) -> Tuple[float, Dict]:
+def score_crypto(symbol: str, current_price: float, open_price: float,
+                prev_close: float, high: float, low: float,
+                historical_prices: List[float] = None,
+                historical_volumes: List[float] = None,
+                use_advanced_indicators: bool = True) -> Tuple[float, Dict]:
     """
     Score cryptocurrency-specific factors
     Crypto markets are 24/7 and more volatile
+
+    Args:
+        symbol: Crypto symbol (e.g., 'BTC/USD')
+        current_price: Current price
+        open_price: Opening price
+        prev_close: Previous close price
+        high: High price
+        low: Low price
+        historical_prices: Optional list of historical prices for advanced indicators
+        historical_volumes: Optional list of historical volumes for advanced indicators
+        use_advanced_indicators: Whether to use RSI, MACD, Bollinger Bands (default True)
+
+    Returns:
+        Tuple of (score, details dict)
     """
     details = {}
-    
+
     # Check if this is a crypto symbol
-    is_crypto = '/' in symbol or symbol in ['BTC', 'ETH', 'BTCUSD', 'ETHUSD']
+    is_crypto = '/' in symbol or symbol in ['BTC', 'ETH', 'BTCUSD', 'ETHUSD', 'SOL', 'AVAX',
+                                              'MATIC', 'LINK', 'UNI', 'AAVE', 'DOT', 'DOGE']
     details['is_crypto'] = is_crypto
-    
+
     if not is_crypto:
         return 0, {'note': 'not_crypto'}
-    
-    # Crypto-specific scoring
+
+    # Basic crypto scoring (always calculated)
     # 1. Volatility is expected and not necessarily bad
     price_range = high - low
     price_range_pct = (price_range / open_price * 100) if open_price > 0 else 0
-    details['price_range_pct'] = price_range_pct
-    
+    details['price_range_pct'] = round(price_range_pct, 2)
+
     # 2. 24/7 movement
     intraday_move = abs(current_price - open_price)
     intraday_move_pct = (intraday_move / open_price * 100) if open_price > 0 else 0
-    details['intraday_move_pct'] = intraday_move_pct
-    
+    details['intraday_move_pct'] = round(intraday_move_pct, 2)
+
     # 3. Trend direction
     trend = (current_price - prev_close) / prev_close if prev_close > 0 else 0
-    details['trend_pct'] = trend * 100
-    
-    # Score: favor strong trends and volatility in crypto
+    details['trend_pct'] = round(trend * 100, 2)
+
+    # 4. Position in range
+    if price_range > 0:
+        position_in_range = (current_price - low) / price_range
+    else:
+        position_in_range = 0.5
+    details['position_in_range'] = round(position_in_range, 2)
+
+    # Basic score calculation
     if trend > 0:
         # Uptrend: higher volatility = higher score
-        score = min(1.0, (trend * 5) + (price_range_pct / 10))
+        basic_score = min(1.0, (trend * 5) + (price_range_pct / 10))
     else:
         # Downtrend: lower score but not zero
-        score = max(0.2, 0.5 + (trend * 3))
-    
-    details['score'] = score
+        basic_score = max(0.2, 0.5 + (trend * 3))
+
+    details['basic_score'] = round(basic_score, 3)
+
+    # Advanced indicators (if historical data provided)
+    if use_advanced_indicators and historical_prices and len(historical_prices) >= 20:
+        try:
+            from .crypto_indicators import analyze_crypto
+            from . import settings
+
+            # Get crypto settings
+            crypto_settings = settings.get('crypto', {})
+
+            # Analyze with technical indicators
+            indicators = analyze_crypto(
+                prices=historical_prices,
+                volumes=historical_volumes or [],
+                rsi_period=crypto_settings.get('rsi_period', 14),
+                bb_period=crypto_settings.get('bb_period', 20),
+                bb_std=crypto_settings.get('bb_std', 2.0),
+                volume_period=crypto_settings.get('volume_ma_period', 20),
+                macd_fast=crypto_settings.get('macd_fast', 12),
+                macd_slow=crypto_settings.get('macd_slow', 26),
+                macd_signal=crypto_settings.get('macd_signal', 9)
+            )
+
+            # Add indicator details
+            details['rsi'] = round(indicators.rsi, 2) if indicators.rsi else None
+            details['rsi_signal'] = indicators.rsi_signal
+            details['macd_trend'] = indicators.macd_trend
+            details['bb_position'] = round(indicators.bb_position, 2) if indicators.bb_position else None
+            details['bb_signal'] = indicators.bb_signal
+            details['volume_ratio'] = round(indicators.volume_ratio, 2) if indicators.volume_ratio else None
+            details['volume_signal'] = indicators.volume_signal
+            details['momentum_score'] = round(indicators.momentum_score, 3) if indicators.momentum_score else None
+            details['volatility_score'] = round(indicators.volatility_score, 3) if indicators.volatility_score else None
+
+            # Combine basic score with indicator score
+            # Weight: 40% basic, 60% indicators
+            advanced_score = (basic_score * 0.4) + (indicators.overall_score * 0.6)
+            details['indicator_score'] = round(indicators.overall_score, 3)
+            details['confidence'] = round(indicators.confidence, 2)
+
+            score = advanced_score
+            details['score'] = round(score, 3)
+            details['mode'] = 'advanced'
+
+        except Exception as e:
+            # Fallback to basic score if indicators fail
+            details['indicator_error'] = str(e)
+            score = basic_score
+            details['score'] = round(score, 3)
+            details['mode'] = 'basic_fallback'
+    else:
+        # Use basic score if no historical data
+        score = basic_score
+        details['score'] = round(score, 3)
+        details['mode'] = 'basic'
+
     return score, details
 
 

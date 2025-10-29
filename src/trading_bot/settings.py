@@ -43,7 +43,26 @@ news = {
 
 crypto = {
     "enabled": False,
-    "universe": ["BTC/USD", "ETH/USD"]
+    "universe": [
+        "BTC/USD",   # Bitcoin
+        "ETH/USD",   # Ethereum
+        "SOL/USD",   # Solana
+        "AVAX/USD",  # Avalanche
+        "MATIC/USD", # Polygon
+        "LINK/USD",  # Chainlink
+        "UNI/USD",   # Uniswap
+        "AAVE/USD",  # Aave
+        "DOT/USD",   # Polkadot
+        "DOGE/USD",  # Dogecoin
+    ],
+    "rsi_period": 14,           # RSI calculation period
+    "bb_period": 20,            # Bollinger Bands period
+    "bb_std": 2,                # Bollinger Bands standard deviations
+    "volume_ma_period": 20,     # Volume moving average period
+    "macd_fast": 12,            # MACD fast period
+    "macd_slow": 26,            # MACD slow period
+    "macd_signal": 9,           # MACD signal period
+    "min_volume_24h": 1000000,  # Minimum 24h volume in USD
 }
 
 data = {
