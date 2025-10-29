@@ -307,10 +307,57 @@ class AlpacaBroker:
         return self.place_order(**kwargs)
 
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel an order"""
+        """
+        Cancel an order with enhanced diagnostics
+
+        Args:
+            order_id: The order ID to cancel
+
+        Returns:
+            True if canceled successfully, False otherwise
+        """
+        # First check order status to understand why cancel might fail
+        order = self.get_order(order_id)
+
+        if order:
+            status = order.get('status', 'unknown')
+            order_type = order.get('type', 'unknown')
+            symbol = order.get('symbol', 'unknown')
+
+            # Check if order is in a state that can be canceled
+            if status in ['filled', 'partially_filled']:
+                self.logger.info(
+                    f"Cannot cancel order {order_id} - already {status} "
+                    f"({order_type} for {symbol})"
+                )
+                return False
+            elif status in ['canceled', 'expired', 'replaced']:
+                self.logger.debug(
+                    f"Order {order_id} already {status} "
+                    f"({order_type} for {symbol})"
+                )
+                return False
+            elif status not in ['new', 'accepted', 'pending_new', 'pending_cancel']:
+                self.logger.warning(
+                    f"Order {order_id} in unexpected state '{status}' "
+                    f"({order_type} for {symbol})"
+                )
+        else:
+            self.logger.warning(f"Cannot retrieve order {order_id} before cancel attempt")
+
+        # Attempt to cancel
         url = f"{self.base_url}/v2/orders/{order_id}"
         result = self._make_request('DELETE', url)
-        return result is not None
+
+        if result:
+            self.logger.debug(f"Successfully canceled order {order_id}")
+            return True
+        else:
+            if order:
+                self.logger.warning(
+                    f"Failed to cancel order {order_id} (status: {order.get('status', 'unknown')})"
+                )
+            return False
 
     def get_order(self, order_id: str) -> Optional[Dict]:
         """Get order details"""
@@ -377,7 +424,7 @@ class AlpacaBroker:
     ) -> Optional[Dict]:
         """
         Replace an existing stop-loss order with a new stop price
-        Cancels old order and places new one atomically
+        Cancels old order and places new one
 
         Args:
             old_order_id: ID of existing stop order to cancel
@@ -390,13 +437,29 @@ class AlpacaBroker:
             New order dict if successful, None if failed
         """
         # First, try to cancel the old order
+        # Note: cancel_order now provides detailed diagnostics about why cancel failed
+        # (e.g., already filled, already canceled, etc.)
+        cancel_success = False
         if old_order_id:
             cancel_success = self.cancel_order(old_order_id)
             if not cancel_success:
-                self.logger.warning(
-                    f"Failed to cancel old stop order {old_order_id}, "
-                    f"attempting to place new order anyway"
-                )
+                # Check if old order still exists (might have been filled/canceled)
+                old_order = self.get_order(old_order_id)
+                if old_order:
+                    status = old_order.get('status', 'unknown')
+                    if status in ['filled', 'partially_filled']:
+                        # Stop was triggered - this is expected, don't place new order
+                        self.logger.info(
+                            f"Stop order {old_order_id} was already {status}, "
+                            f"not placing replacement for {symbol}"
+                        )
+                        return None
+                    elif status not in ['canceled', 'expired', 'replaced']:
+                        # Unexpected state - warn but try to place new order
+                        self.logger.warning(
+                            f"Could not cancel stop order {old_order_id} (status: {status}), "
+                            f"attempting to place new order for {symbol}"
+                        )
 
         # Place new stop-loss order
         new_order = self.place_stop_loss_order(
@@ -407,8 +470,9 @@ class AlpacaBroker:
         )
 
         if new_order:
+            action = "Replaced" if cancel_success else "Placed new"
             self.logger.info(
-                f"Replaced stop-loss for {symbol}: "
+                f"{action} stop-loss for {symbol}: "
                 f"old_order={old_order_id}, new_stop=${new_stop_price:.2f}"
             )
 
