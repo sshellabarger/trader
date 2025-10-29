@@ -16,7 +16,8 @@ import statistics
 
 from .strategies import (
     score_momentum, score_mean_reversion, score_news, score_volume,
-    score_earnings, score_longterm_trend, score_longterm_momentum, score_crypto
+    score_earnings, score_longterm_trend, score_longterm_momentum, score_crypto,
+    score_forex, score_etf
 )
 from .strategy_manager import MarketRegime
 from .broker_alpaca import AlpacaBroker
@@ -68,6 +69,8 @@ class StrategyType(Enum):
     LONGTERM_TREND = "longterm_trend"
     LONGTERM_MOMENTUM = "longterm_momentum"
     CRYPTO = "crypto"
+    FOREX = "forex"
+    ETF = "etf"
 
 
 @dataclass
@@ -338,6 +341,8 @@ class StrategyBacktester:
             StrategyType.LONGTERM_TREND: score_longterm_trend,
             StrategyType.LONGTERM_MOMENTUM: score_longterm_momentum,
             StrategyType.CRYPTO: score_crypto,
+            StrategyType.FOREX: score_forex,
+            StrategyType.ETF: score_etf,
         }
 
         # Test state
@@ -403,6 +408,13 @@ class StrategyBacktester:
 
             elif strategy_type == StrategyType.CRYPTO:
                 score, details = strategy_func(symbol, current_price, open_price, prev_close, high, low)
+
+            elif strategy_type == StrategyType.FOREX:
+                score, details = strategy_func(symbol, current_price, open_price, prev_close, high, low)
+
+            elif strategy_type == StrategyType.ETF:
+                avg_volume = prev_bar.get('v', volume)
+                score, details = strategy_func(symbol, current_price, open_price, prev_close, high, low, volume, avg_volume)
 
             else:
                 score, details = 0.0, {'error': 'Unknown strategy type'}
