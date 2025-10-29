@@ -54,6 +54,7 @@ class AlpacaBroker:
                 self.logger.warning(f"Bad request: {method} {url}: {e.response.text}")
             elif e.response.status_code == 403:
                 self.logger.error(f"Access forbidden (check API permissions): {method} {url}")
+                self.logger.error(f"Response details: {e.response.text}")
             elif e.response.status_code == 422:
                 self.logger.warning(f"Unprocessable entity: {method} {url}: {e.response.text}")
             else:
