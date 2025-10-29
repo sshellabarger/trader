@@ -5,29 +5,35 @@ from __future__ import annotations
 import os
 import csv
 import pathlib
-from typing import List
+from typing import List, Any, Dict
 
 
-def load_universe(default: List[str] | None = None) -> List[str]:
+def load_universe(settings: Any = None, default: List[str] | None = None) -> List[str]:
     """
-    Load trading universe from environment variable or use default
+    Load trading universe from environment variable or use default,
+    then combine with crypto/forex/ETF symbols from settings
 
     Priority:
     1. DAYTRADER_UNIVERSE env var pointing to CSV file
     2. DAYTRADER_UNIVERSE env var with comma-separated symbols
     3. Default list provided
     4. Fallback default: ["AAPL", "MSFT", "NVDA"]
+
+    Then adds:
+    - Crypto symbols from settings if crypto strategy enabled
+    - Forex symbols from settings if forex strategy enabled
+    - ETF symbols from settings if etf strategy enabled
     """
     if default is None:
         default = ["AAPL", "MSFT", "NVDA"]
 
+    # Load base universe (stocks from CSV or default)
+    base_symbols = []
     env = (os.environ.get("DAYTRADER_UNIVERSE") or "").strip()
 
     if not env:
-        return default
-
-    # Check if it's a file path
-    if env.endswith('.csv') or '/' in env or '\\' in env:
+        base_symbols = default
+    elif env.endswith('.csv') or '/' in env or '\\' in env:
         # It's a path - try to load CSV
         p = pathlib.Path(env)
 
@@ -41,33 +47,89 @@ def load_universe(default: List[str] | None = None) -> List[str]:
 
         if p.exists() and p.is_file():
             try:
-                return _load_symbols_from_csv(p)
+                base_symbols = _load_symbols_from_csv(p)
             except Exception as e:
                 print(f"Error loading universe from {p}: {e}")
                 print(f"Falling back to default universe")
-                return default
+                base_symbols = default
         else:
             print(f"Universe file not found: {env}")
             print(f"Falling back to default universe")
-            return default
+            base_symbols = default
+    else:
+        # Not a file path - treat as comma-separated list
+        symbols = [s.strip().upper() for s in env.split(",") if s.strip()]
 
-    # Not a file path - treat as comma-separated list
-    symbols = [s.strip().upper() for s in env.split(",") if s.strip()]
+        if symbols:
+            # Filter out invalid symbols (allow / for forex/crypto)
+            valid_symbols = [
+                s for s in symbols
+                if (s.replace('/', '').isalpha() or s.isalpha()) and 1 <= len(s) <= 10
+            ]
 
-    if symbols:
-        # Filter out invalid symbols (no special characters, reasonable length)
-        valid_symbols = [
-            s for s in symbols
-            if s.isalpha() and 1 <= len(s) <= 5
-        ]
-
-        if valid_symbols:
-            return sorted(list(dict.fromkeys(valid_symbols)))  # Remove duplicates
+            if valid_symbols:
+                base_symbols = sorted(list(dict.fromkeys(valid_symbols)))  # Remove duplicates
+            else:
+                print(f"No valid symbols found in: {env}")
+                base_symbols = default
         else:
-            print(f"No valid symbols found in: {env}")
-            return default
+            base_symbols = default
 
-    return default
+    # Add crypto/forex/ETF symbols from settings if enabled
+    all_symbols = base_symbols.copy()
+
+    if settings:
+        # Get settings dict
+        if hasattr(settings, 'get'):
+            settings_dict = settings.get if callable(settings.get) else settings
+        elif hasattr(settings, 'as_dict'):
+            settings_dict = settings.as_dict()
+        elif isinstance(settings, dict):
+            settings_dict = settings
+        else:
+            settings_dict = {}
+
+        # Helper to get setting value
+        def get_setting(category, key=None):
+            if callable(settings_dict):
+                # settings_dict is a callable (like Settings.get method)
+                cat_data = settings_dict(category, {})
+                if key and isinstance(cat_data, dict):
+                    return cat_data.get(key)
+                return cat_data
+            elif isinstance(settings_dict, dict):
+                cat_data = settings_dict.get(category, {})
+                if key and isinstance(cat_data, dict):
+                    return cat_data.get(key)
+                return cat_data
+            return None
+
+        # Add crypto symbols if enabled
+        crypto_enabled = get_setting('strategies', 'crypto') or get_setting('crypto', 'enabled')
+        if crypto_enabled:
+            crypto_universe = get_setting('crypto', 'universe') or []
+            if crypto_universe:
+                all_symbols.extend(crypto_universe)
+                print(f"Added {len(crypto_universe)} crypto symbols from settings")
+
+        # Add forex symbols if enabled
+        forex_enabled = get_setting('strategies', 'forex') or get_setting('forex', 'enabled')
+        if forex_enabled:
+            forex_universe = get_setting('forex', 'universe') or []
+            if forex_universe:
+                all_symbols.extend(forex_universe)
+                print(f"Added {len(forex_universe)} forex symbols from settings")
+
+        # Add ETF symbols if enabled
+        etf_enabled = get_setting('strategies', 'etf') or get_setting('etf', 'enabled')
+        if etf_enabled:
+            etf_universe = get_setting('etf', 'universe') or []
+            if etf_universe:
+                all_symbols.extend(etf_universe)
+                print(f"Added {len(etf_universe)} ETF symbols from settings")
+
+    # Remove duplicates and return
+    return sorted(list(dict.fromkeys(all_symbols)))
 
 
 def _load_symbols_from_csv(filepath: pathlib.Path) -> List[str]:
@@ -120,8 +182,8 @@ def _load_symbols_from_csv(filepath: pathlib.Path) -> List[str]:
                 if symbol.lower() in ['symbol', 'ticker', 'name']:
                     continue
 
-                # Only accept valid stock symbols
-                if symbol.isalpha() and 1 <= len(s) <= 5:
+                # Only accept valid stock symbols (allow / for forex/crypto)
+                if (symbol.replace('/', '').isalpha() or symbol.replace('/', '').replace('-', '').isalpha()) and 1 <= len(symbol) <= 10:
                     symbols.append(symbol)
 
     # Remove duplicates and sort
