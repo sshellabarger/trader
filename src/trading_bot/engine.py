@@ -344,14 +344,19 @@ class Trader:
         converted = []
         for pos in positions:
             try:
+                # Determine position side from qty (positive = long, negative = short)
+                qty = int(pos.get('qty', 0))
+                side = 'long' if qty > 0 else 'short'
+
                 converted.append(RiskPosition(
                     symbol=pos.get('symbol', ''),
-                    qty=int(pos.get('qty', 0)),
+                    qty=abs(qty),  # Use absolute value
                     avg_entry_price=float(pos.get('avg_entry_price', 0)),
                     current_price=float(pos.get('current_price', 0)),
                     market_value=float(pos.get('market_value', 0)),
                     unrealized_pl=float(pos.get('unrealized_pl', 0)),
-                    unrealized_plpc=float(pos.get('unrealized_plpc', 0))
+                    unrealized_plpc=float(pos.get('unrealized_plpc', 0)),
+                    side=side
                 ))
             except Exception as e:
                 self.logger.warning(f"Error converting position {pos.get('symbol')}: {e}")
@@ -377,25 +382,33 @@ class Trader:
         pass
 
     def _close_position(self, symbol: str, qty: int, current_price: float, reason: str):
-        """Close a position with proper logging"""
+        """Close a position with proper logging (handles both long and short positions)"""
         try:
+            # Determine position side from qty
+            # Positive qty = long position (close with sell)
+            # Negative qty = short position (close with buy)
+            is_long = qty > 0
+            close_side = 'sell' if is_long else 'buy'
+            abs_qty = abs(qty)
+            position_type = 'LONG' if is_long else 'SHORT'
+
             if self.simulation_mode:
                 self.logger.info(
-                    f"[SIMULATION] Would close {symbol}: {qty} shares @ ${current_price:.2f}, "
+                    f"[SIMULATION] Would close {position_type} {symbol}: {abs_qty} shares @ ${current_price:.2f}, "
                     f"reason={reason}"
                 )
                 return
 
             order = self.broker.place_order(
                 symbol=symbol,
-                side='sell',
-                qty=abs(qty),
+                side=close_side,
+                qty=abs_qty,
                 order_type='market',
                 time_in_force='day'
             )
 
             if order:
-                self.logger.info(f"✓ Closed {symbol}: {qty} shares, reason={reason}")
+                self.logger.info(f"✓ Closed {position_type} {symbol}: {abs_qty} shares, reason={reason}")
 
                 # Log to state
                 self.state.add_event(
@@ -469,6 +482,23 @@ class Trader:
                 strategy_config = get_strategy_config(primary_strategy)
                 entry_threshold = strategy_config.get('entry_threshold', 0.62)
 
+                # Get the signal score
+                score = candidate.final_score if hasattr(candidate, 'final_score') else candidate.get('score', 0)
+
+                # Determine position side based on score
+                # High scores (> 0.6) = LONG (bullish)
+                # Low scores (< 0.4) = SHORT (bearish)
+                # Mid scores (0.4-0.6) = No trade (neutral)
+                if score >= 0.6:
+                    position_side = 'long'
+                    order_side = 'buy'
+                elif score <= 0.4:
+                    position_side = 'short'
+                    order_side = 'sell'
+                else:
+                    self.logger.debug(f"Skipping {symbol}: neutral score {score:.3f}")
+                    continue
+
                 # Check if signal is strong enough
                 if self.strategy_manager:
                     should_enter, reason = self.strategy_manager.get_entry_signal(
@@ -479,11 +509,6 @@ class Trader:
 
                     if not should_enter:
                         self.logger.debug(f"Skipping {symbol}: {reason}")
-                        continue
-                else:
-                    # Basic scoring fallback
-                    score = candidate.final_score if hasattr(candidate, 'final_score') else candidate.get('score', 0)
-                    if score < entry_threshold:
                         continue
 
                 # Get current market data
@@ -502,6 +527,7 @@ class Trader:
                 stop_loss_pct = strategy_config.get('stop_loss_pct', 0.5)
                 stop_loss_bps = stop_loss_pct * 100  # Convert % to basis points
 
+                # Calculate stop loss based on position side
                 if self.strategy_manager and hasattr(candidate, 'regime'):
                     is_crypto = getattr(candidate, 'is_crypto', False)
                     stop_loss_price = self.strategy_manager.calculate_stop_loss(
@@ -511,8 +537,17 @@ class Trader:
                         is_crypto,
                         strategy_config=strategy_config
                     )
+                    # Adjust for shorts: stop should be above entry
+                    if position_side == 'short':
+                        distance = abs(current_price - stop_loss_price)
+                        stop_loss_price = current_price + distance
                 else:
-                    stop_loss_price = current_price * (1 - stop_loss_pct / 100)
+                    # For longs: stop below entry
+                    # For shorts: stop above entry
+                    if position_side == 'long':
+                        stop_loss_price = current_price * (1 - stop_loss_pct / 100)
+                    else:  # short
+                        stop_loss_price = current_price * (1 + stop_loss_pct / 100)
 
                 # Calculate position size
                 qty = 0
@@ -540,7 +575,7 @@ class Trader:
                 if self.order_validator:
                     validation = self.order_validator.validate_order(
                         symbol=symbol,
-                        side='buy',
+                        side=order_side,  # 'buy' for longs, 'sell' for shorts
                         qty=qty,
                         order_type='market',
                         price=current_price,
@@ -560,25 +595,24 @@ class Trader:
                         self.logger.info(f"Order warnings for {symbol}: {validation.warnings}")
 
                 # Place order
-                score = candidate.final_score if hasattr(candidate, 'final_score') else candidate.get('score', 0)
                 strategies = candidate.active_strategies if hasattr(candidate, 'active_strategies') else []
 
                 self.logger.info(
-                    f"ENTRY SIGNAL: {symbol} score={score:.3f}, qty={qty}, "
+                    f"ENTRY SIGNAL ({position_side.upper()}): {symbol} score={score:.3f}, qty={qty}, "
                     f"price=${current_price:.2f}, stop=${stop_loss_price:.2f}, "
                     f"primary_strategy={primary_strategy.value}, strategies={strategies}"
                 )
 
                 if self.simulation_mode:
                     self.logger.info(
-                        f"[SIMULATION] Would buy {symbol}: {qty} shares @ ${current_price:.2f}"
+                        f"[SIMULATION] Would {order_side} {symbol}: {qty} shares @ ${current_price:.2f} ({position_side})"
                     )
                     new_positions_opened += 1
                     continue
 
                 order = self.broker.place_order(
                     symbol=symbol,
-                    side='buy',
+                    side=order_side,  # 'buy' for longs, 'sell' for shorts
                     qty=qty,
                     order_type='market',
                     time_in_force='day'
@@ -592,9 +626,14 @@ class Trader:
                         self.risk_manager.increment_trade_count()
 
                     # Place protective stop-loss order
-                    stop_order = self.broker.place_stop_loss_order(
+                    # For longs: stop is a sell order (close long)
+                    # For shorts: stop is a buy order (cover short)
+                    stop_order_side = 'sell' if position_side == 'long' else 'buy'
+                    stop_order = self.broker.place_order(
                         symbol=symbol,
                         qty=qty,
+                        side=stop_order_side,
+                        order_type='stop',
                         stop_price=stop_loss_price,
                         time_in_force='gtc'  # Good til cancelled
                     )
@@ -639,7 +678,8 @@ class Trader:
                             primary_strategy=primary_strategy.value,
                             entry_price=current_price,
                             stop_loss_pct=stop_loss_pct,
-                            take_profit_pct=take_profit_pct
+                            take_profit_pct=take_profit_pct,
+                            side=position_side  # 'long' or 'short'
                         )
 
                 else:
