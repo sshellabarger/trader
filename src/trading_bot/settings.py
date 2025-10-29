@@ -25,7 +25,9 @@ strategies = {
     "earnings": True,
     "longterm_trend": True,
     "longterm_momentum": True,
-    "crypto": False  # Set to True to enable 24/7 crypto trading
+    "crypto": False,  # Set to True to enable 24/7 crypto trading
+    "forex": False,   # Set to True to enable 24/5 forex trading
+    "etf": False      # Set to True to enable ETF trading
 }
 
 thresholds = {
@@ -63,6 +65,69 @@ crypto = {
     "macd_slow": 26,            # MACD slow period
     "macd_signal": 9,           # MACD signal period
     "min_volume_24h": 1000000,  # Minimum 24h volume in USD
+}
+
+forex = {
+    "enabled": False,
+    "universe": [
+        "EUR/USD",   # Euro / US Dollar (most liquid)
+        "GBP/USD",   # British Pound / US Dollar
+        "USD/JPY",   # US Dollar / Japanese Yen
+        "USD/CHF",   # US Dollar / Swiss Franc
+        "AUD/USD",   # Australian Dollar / US Dollar
+        "USD/CAD",   # US Dollar / Canadian Dollar
+        "NZD/USD",   # New Zealand Dollar / US Dollar
+        "EUR/GBP",   # Euro / British Pound
+        "EUR/JPY",   # Euro / Japanese Yen
+        "GBP/JPY",   # British Pound / Japanese Yen
+    ],
+    "rsi_period": 14,           # RSI calculation period
+    "atr_period": 14,           # ATR calculation period
+    "macd_fast": 12,            # MACD fast period
+    "macd_slow": 26,            # MACD slow period
+    "macd_signal": 9,           # MACD signal period
+    "ema_short": 12,            # Short EMA period
+    "ema_long": 26,             # Long EMA period
+    "min_daily_volume": 100000, # Minimum daily volume
+    "max_spread_pips": 5,       # Maximum spread in pips
+}
+
+etf = {
+    "enabled": False,
+    "universe": [
+        # Major Market ETFs
+        "SPY",    # S&P 500
+        "QQQ",    # Nasdaq 100
+        "IWM",    # Russell 2000
+        "DIA",    # Dow Jones
+        # Sector ETFs
+        "XLE",    # Energy
+        "XLF",    # Financials
+        "XLK",    # Technology
+        "XLV",    # Healthcare
+        "XLI",    # Industrials
+        "XLP",    # Consumer Staples
+        "XLY",    # Consumer Discretionary
+        "XLB",    # Materials
+        "XLU",    # Utilities
+        "XLRE",   # Real Estate
+        "XLC",    # Communication Services
+        # International
+        "EEM",    # Emerging Markets
+        "EFA",    # EAFE (Europe, Asia, Far East)
+        # Commodities
+        "GLD",    # Gold
+        "SLV",    # Silver
+        "USO",    # Oil
+        # Bonds
+        "TLT",    # Long-term Treasury
+        "HYG",    # High Yield Corporate
+        "LQD",    # Investment Grade Corporate
+    ],
+    "min_daily_volume": 1000000,  # ETFs need high liquidity
+    "max_spread_bps": 10,         # Maximum 10 basis point spread
+    "sector_rotation": True,      # Enable sector rotation signals
+    "prefer_high_aum": True,      # Prefer ETFs with high assets under management
 }
 
 data = {
@@ -109,6 +174,8 @@ def get_settings() -> Dict[str, Any]:
         'thresholds': thresholds.copy(),
         'news': news.copy(),
         'crypto': crypto.copy(),
+        'forex': forex.copy(),
+        'etf': etf.copy(),
         'data': data.copy(),
         'risk': risk.copy(),
         'backtest': backtest.copy()
@@ -190,6 +257,8 @@ def _refresh_from_kv():
     thresholds.update(all_settings['thresholds'])
     news.update(all_settings['news'])
     crypto.update(all_settings['crypto'])
+    forex.update(all_settings['forex'])
+    etf.update(all_settings['etf'])
     data.update(all_settings['data'])
     risk.update(all_settings['risk'])
     backtest.update(all_settings['backtest'])

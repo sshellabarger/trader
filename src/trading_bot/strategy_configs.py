@@ -105,6 +105,46 @@ STRATEGY_CONFIGS: Dict[str, Dict[str, Any]] = {
         'trailing_stop_activation': 3.0,  # Activate trailing stop at 3% profit
         'trailing_stop_distance': 1.5,    # Trail by 1.5%
     },
+
+    "forex": {
+        'entry_threshold': 0.62,       # Higher threshold - forex is technical
+        'exit_threshold': 0.38,        # Exit when technical signals weaken
+        'stop_loss_pct': 0.5,          # Tight stop - forex moves in small pips
+        'take_profit_pct': 1.2,        # Smaller targets - typical forex swing
+        'max_hold_minutes': 360,       # 6 hours - forex trades 24/5
+        'default_duration': 120,       # 2 hour test window
+        'position_size_pct': 2.0,      # Standard position sizing
+
+        # Forex-specific parameters
+        'use_advanced_indicators': True,  # Enable RSI, MACD, ATR, Pivots
+        'min_rsi': 30,                    # Don't buy if RSI < 30 (oversold)
+        'max_rsi': 70,                    # Don't buy if RSI > 70 (overbought)
+        'max_atr_pct': 2.5,               # Don't trade if ATR > 2.5% (too volatile)
+        'min_atr_pct': 0.2,               # Don't trade if ATR < 0.2% (too quiet)
+        'respect_pivot_levels': True,     # Use pivot points for entry/exit
+        'trailing_stop_activation': 0.8,  # Activate trailing stop at 0.8% profit
+        'trailing_stop_distance': 0.3,    # Trail by 0.3% (30 pips on typical pair)
+        'use_ema_confirmation': True,     # Require EMA crossover confirmation
+    },
+
+    "etf": {
+        'entry_threshold': 0.58,       # Moderate threshold - ETFs are less volatile
+        'exit_threshold': 0.35,        # Exit when momentum fades
+        'stop_loss_pct': 1.0,          # Standard stop for ETFs
+        'take_profit_pct': 2.5,        # Moderate targets - ETFs move with sectors
+        'max_hold_minutes': 300,       # 5 hours - hold through day
+        'default_duration': 120,       # 2 hour test window
+        'position_size_pct': 3.0,      # Larger size - ETFs are diversified
+
+        # ETF-specific parameters
+        'require_high_volume': True,      # ETFs must have strong volume
+        'min_volume_ratio': 1.0,          # Require at least average volume
+        'sector_rotation_enabled': True,  # Use sector performance signals
+        'sector_boost_threshold': 0.01,   # Boost if sector up >1%
+        'prefer_broad_market': True,      # Prefer SPY, QQQ, IWM over narrow ETFs
+        'max_spread_bps': 10,             # Maximum 10 basis point spread
+        'check_nav_premium': False,       # Check for premium/discount to NAV (future)
+    },
 }
 
 
