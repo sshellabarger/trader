@@ -394,9 +394,25 @@ def compare_results(args):
         with open(result_file, 'r') as f:
             data = json.load(f)
 
+        # Validate that data is a dictionary (metrics file) not a list (trades/signals file)
+        if not isinstance(data, dict):
+            logger.warning(f"Skipping {result_file}: Expected a metrics file (dict), but got {type(data).__name__}. "
+                          f"Make sure you're passing test result files (e.g., *_test_*.json), not trades or signals files.")
+            continue
+
+        # Check if this is a comparison report or a metrics file
+        if 'strategies_compared' in data:
+            logger.warning(f"Skipping {result_file}: This appears to be a comparison report, not a test result file. "
+                          f"Please pass individual test result files (e.g., *_test_*.json).")
+            continue
+
         # Reconstruct metrics object
-        metrics = DetailedStrategyMetrics(**data)
-        results.append(metrics)
+        try:
+            metrics = DetailedStrategyMetrics(**data)
+            results.append(metrics)
+        except TypeError as e:
+            logger.warning(f"Skipping {result_file}: Unable to parse as DetailedStrategyMetrics - {e}")
+            continue
 
     if not results:
         logger.error("No valid result files found")
