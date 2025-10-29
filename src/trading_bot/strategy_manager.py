@@ -1,6 +1,6 @@
 """
 Enhanced Strategy Manager with Regime Detection
-Includes: momentum, mean_reversion, news, volume, earnings, longterm_trend, longterm_momentum, crypto
+Includes: momentum, mean_reversion, news, volume, earnings, longterm_trend, longterm_momentum, crypto, forex, etf
 """
 import logging
 from dataclasses import dataclass
@@ -118,14 +118,16 @@ class StrategyManager:
 
         # Base strategy weights (DEPRECATED - kept for backward compatibility)
         self.base_weights = {
-            'momentum': 0.25,
-            'mean_reversion': 0.20,
+            'momentum': 0.22,
+            'mean_reversion': 0.18,
             'news': 0.10,
             'volume': 0.08,
             'earnings': 0.05,
-            'longterm_trend': 0.15,
-            'longterm_momentum': 0.12,
-            'crypto': 0.05
+            'longterm_trend': 0.13,
+            'longterm_momentum': 0.10,
+            'crypto': 0.05,
+            'forex': 0.05,
+            'etf': 0.04
         }
 
         # Fixed strategy confidence values (intrinsic reliability)
@@ -138,56 +140,70 @@ class StrategyManager:
             'earnings': 0.75,        # High reliability near earnings
             'longterm_trend': 0.65,  # Good for sustained moves
             'longterm_momentum': 0.65,  # Good for sustained moves
-            'crypto': 0.60           # Specialized, volatile
+            'crypto': 0.60,          # Specialized, volatile
+            'forex': 0.70,           # Technical analysis driven
+            'etf': 0.68              # Diversified, less volatile
         }
 
         # Regime-specific strategy preferences
         self.regime_weights = {
             MarketRegime.TRENDING_UP: {
-                'momentum': 0.35,
-                'mean_reversion': 0.05,
-                'volume': 0.15,
-                'news': 0.08,
+                'momentum': 0.30,
+                'mean_reversion': 0.04,
+                'volume': 0.13,
+                'news': 0.07,
                 'earnings': 0.02,
-                'longterm_trend': 0.20,
-                'longterm_momentum': 0.10,
-                'crypto': 0.05
+                'longterm_trend': 0.18,
+                'longterm_momentum': 0.09,
+                'crypto': 0.05,
+                'forex': 0.08,
+                'etf': 0.04
             },
             MarketRegime.TRENDING_DOWN: {
-                'momentum': 0.10,
-                'mean_reversion': 0.35,
-                'volume': 0.15,
-                'news': 0.12,
-                'earnings': 0.05,
-                'longterm_trend': 0.08,
-                'longterm_momentum': 0.10,
-                'crypto': 0.05
+                'momentum': 0.08,
+                'mean_reversion': 0.32,
+                'volume': 0.13,
+                'news': 0.10,
+                'earnings': 0.04,
+                'longterm_trend': 0.07,
+                'longterm_momentum': 0.09,
+                'crypto': 0.05,
+                'forex': 0.08,
+                'etf': 0.04
             },
             MarketRegime.RANGING: {
-                'momentum': 0.05,
-                'mean_reversion': 0.40,
-                'volume': 0.10,
-                'news': 0.15,
-                'earnings': 0.05,
-                'longterm_trend': 0.15,
-                'longterm_momentum': 0.05,
-                'crypto': 0.05
+                'momentum': 0.04,
+                'mean_reversion': 0.35,
+                'volume': 0.09,
+                'news': 0.13,
+                'earnings': 0.04,
+                'longterm_trend': 0.13,
+                'longterm_momentum': 0.04,
+                'crypto': 0.04,
+                'forex': 0.10,
+                'etf': 0.04
             },
             MarketRegime.HIGH_VOLATILITY: {
-                'momentum': 0.20,
-                'mean_reversion': 0.15,
-                'volume': 0.25,
-                'news': 0.15,
-                'earnings': 0.05,
-                'longterm_trend': 0.08,
-                'longterm_momentum': 0.07,
-                'crypto': 0.05
+                'momentum': 0.18,
+                'mean_reversion': 0.13,
+                'volume': 0.22,
+                'news': 0.13,
+                'earnings': 0.04,
+                'longterm_trend': 0.07,
+                'longterm_momentum': 0.06,
+                'crypto': 0.05,
+                'forex': 0.08,
+                'etf': 0.04
             }
         }
 
-        # Crypto-specific universe
+        # Asset-specific universes
         self.crypto_universe = settings.get('crypto', {}).get('universe', ['BTC/USD', 'ETH/USD'])
+        self.forex_universe = settings.get('forex', {}).get('universe', ['EUR/USD', 'GBP/USD'])
+        self.etf_universe = settings.get('etf', {}).get('universe', ['SPY', 'QQQ', 'IWM'])
         self.logger.info(f"Crypto universe: {self.crypto_universe}")
+        self.logger.info(f"Forex universe: {self.forex_universe}")
+        self.logger.info(f"ETF universe: {self.etf_universe}")
 
     def score_momentum(self, current_price: float, open_price: float, prev_close: float, high: float, low: float) -> Tuple[float, Dict]:
         """Score momentum strategy"""
@@ -387,10 +403,38 @@ class StrategyManager:
         # Check if in crypto universe
         if symbol in self.crypto_universe:
             return True
-        
+
         # Check common crypto patterns
         crypto_patterns = ['/', 'USD', 'BTC', 'ETH', 'LTC', 'DOGE', 'ADA', 'SOL']
         return any(pattern in symbol for pattern in crypto_patterns)
+
+    def is_forex_symbol(self, symbol: str) -> bool:
+        """Check if symbol is a forex pair"""
+        # Check if in forex universe
+        if symbol in self.forex_universe:
+            return True
+
+        # Check if symbol contains forex currency codes
+        forex_currencies = ['EUR', 'GBP', 'USD', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']
+        if '/' in symbol:
+            parts = symbol.split('/')
+            if len(parts) == 2 and all(part in forex_currencies for part in parts):
+                return True
+
+        return False
+
+    def is_etf_symbol(self, symbol: str) -> bool:
+        """Check if symbol is an ETF"""
+        # Check if in ETF universe
+        if symbol in self.etf_universe:
+            return True
+
+        # Common ETF patterns
+        # Most sector ETFs start with 'XL', many end with 'ETF'
+        if symbol.startswith('XL') or symbol.endswith('ETF'):
+            return True
+
+        return False
 
     def rank_candidates(self, snapshots: Dict, news_data, earnings_calendar: Dict, min_score: float = 0.5) -> List[CombinedSignal]:
         """
@@ -420,8 +464,10 @@ class StrategyManager:
                 volume = snapshot.get('dailyBar', {}).get('v')
                 avg_volume = snapshot.get('prevDailyBar', {}).get('v')
 
-                # Check if crypto
+                # Check asset types
                 is_crypto = self.is_crypto_symbol(symbol)
+                is_forex = self.is_forex_symbol(symbol)
+                is_etf = self.is_etf_symbol(symbol)
 
                 # Detect regime
                 regime, regime_details = self.regime_detector.detect_regime(
@@ -529,6 +575,32 @@ class StrategyManager:
                         strategy_name='crypto',
                         score=score,
                         confidence=self.strategy_confidence.get('crypto', 0.60),
+                        regime_match=regime_match,
+                        details=details
+                    ))
+
+                # Forex signal
+                if self.strategies_enabled.get('forex', False) and is_forex:
+                    score, details = strat.score_forex(symbol, current_price, open_price, prev_close, high, low)
+                    # Forex works well in all regimes but especially ranging
+                    regime_match = regime in [MarketRegime.RANGING, MarketRegime.TRENDING_UP, MarketRegime.TRENDING_DOWN]
+                    signals.append(SignalResult(
+                        strategy_name='forex',
+                        score=score,
+                        confidence=self.strategy_confidence.get('forex', 0.70),
+                        regime_match=regime_match,
+                        details=details
+                    ))
+
+                # ETF signal
+                if self.strategies_enabled.get('etf', False) and is_etf:
+                    score, details = strat.score_etf(symbol, current_price, open_price, prev_close, high, low, volume, avg_volume)
+                    # ETF works best in trending markets
+                    regime_match = regime in [MarketRegime.TRENDING_UP, MarketRegime.TRENDING_DOWN]
+                    signals.append(SignalResult(
+                        strategy_name='etf',
+                        score=score,
+                        confidence=self.strategy_confidence.get('etf', 0.68),
                         regime_match=regime_match,
                         details=details
                     ))

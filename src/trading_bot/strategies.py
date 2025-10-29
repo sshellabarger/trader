@@ -416,46 +416,300 @@ def score_crypto(symbol: str, current_price: float, open_price: float,
     return score, details
 
 
-def score_stock_candidates(snaps: Dict[str, dict], news_counts: Dict[str, int], 
+def score_forex(symbol: str, current_price: float, open_price: float,
+                prev_close: float, high: float, low: float,
+                historical_prices: List[float] = None,
+                historical_highs: List[float] = None,
+                historical_lows: List[float] = None,
+                use_advanced_indicators: bool = True) -> Tuple[float, Dict]:
+    """
+    Score forex (foreign exchange) trading opportunities
+    Forex markets are 24/5 and have unique characteristics
+
+    Args:
+        symbol: Forex symbol (e.g., 'EUR/USD', 'GBP/JPY')
+        current_price: Current price
+        open_price: Opening price
+        prev_close: Previous close price
+        high: High price
+        low: Low price
+        historical_prices: Optional list of historical prices for advanced indicators
+        historical_highs: Optional list of historical highs
+        historical_lows: Optional list of historical lows
+        use_advanced_indicators: Whether to use ATR, pivots, MACD (default True)
+
+    Returns:
+        Tuple of (score, details dict)
+    """
+    details = {}
+
+    # Check if this is a forex symbol
+    is_forex = '/' in symbol and any(curr in symbol for curr in [
+        'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD'
+    ])
+    details['is_forex'] = is_forex
+
+    if not is_forex:
+        return 0, {'note': 'not_forex'}
+
+    # Basic forex scoring (always calculated)
+    # 1. Intraday movement (forex moves are typically smaller than stocks)
+    intraday_move = abs(current_price - open_price)
+    intraday_move_pct = (intraday_move / open_price * 100) if open_price > 0 else 0
+    details['intraday_move_pct'] = round(intraday_move_pct, 4)
+
+    # 2. Trend direction
+    trend = (current_price - prev_close) / prev_close if prev_close > 0 else 0
+    details['trend_pct'] = round(trend * 100, 4)
+
+    # 3. Position in daily range
+    price_range = high - low
+    if price_range > 0:
+        position_in_range = (current_price - low) / price_range
+    else:
+        position_in_range = 0.5
+    details['position_in_range'] = round(position_in_range, 2)
+
+    # 4. Volatility (range as % of price)
+    price_range_pct = (price_range / open_price * 100) if open_price > 0 else 0
+    details['price_range_pct'] = round(price_range_pct, 4)
+
+    # Basic score calculation
+    # Forex trends can be strong but moves are smaller
+    if trend > 0:
+        # Uptrend: moderate volatility preferred
+        basic_score = min(1.0, (trend * 50) + (price_range_pct * 5) + (position_in_range * 0.2))
+    else:
+        # Downtrend or ranging
+        basic_score = max(0.2, 0.5 + (trend * 30))
+
+    details['basic_score'] = round(basic_score, 3)
+
+    # Advanced indicators (if historical data provided)
+    if use_advanced_indicators and historical_prices and len(historical_prices) >= 26:
+        try:
+            from .forex_indicators import analyze_forex
+            from . import settings
+
+            # Get forex settings
+            forex_settings = settings.get('forex', {})
+
+            # Analyze with technical indicators
+            indicators = analyze_forex(
+                prices=historical_prices,
+                highs=historical_highs or [],
+                lows=historical_lows or [],
+                rsi_period=forex_settings.get('rsi_period', 14),
+                atr_period=forex_settings.get('atr_period', 14),
+                macd_fast=forex_settings.get('macd_fast', 12),
+                macd_slow=forex_settings.get('macd_slow', 26),
+                macd_signal=forex_settings.get('macd_signal', 9),
+                ema_short=forex_settings.get('ema_short', 12),
+                ema_long=forex_settings.get('ema_long', 26)
+            )
+
+            # Add indicator details
+            details['rsi'] = round(indicators.rsi, 2) if indicators.rsi else None
+            details['rsi_signal'] = indicators.rsi_signal
+            details['atr_pct'] = round(indicators.atr_pct, 4) if indicators.atr_pct else None
+            details['volatility_signal'] = indicators.volatility_signal
+            details['pivot'] = round(indicators.pivot, 4) if indicators.pivot else None
+            details['pivot_signal'] = indicators.pivot_signal
+            details['macd_trend'] = indicators.macd_trend
+            details['trend_signal'] = indicators.trend_signal
+            details['momentum_score'] = round(indicators.momentum_score, 3) if indicators.momentum_score else None
+            details['price_position'] = round(indicators.price_position, 2) if indicators.price_position else None
+
+            # Combine basic score with indicator score
+            # Weight: 30% basic, 70% indicators (indicators more important for forex)
+            advanced_score = (basic_score * 0.3) + (indicators.overall_score * 0.7)
+            details['indicator_score'] = round(indicators.overall_score, 3)
+            details['confidence'] = round(indicators.confidence, 2)
+
+            score = advanced_score
+            details['score'] = round(score, 3)
+            details['mode'] = 'advanced'
+
+        except Exception as e:
+            # Fallback to basic score if indicators fail
+            details['indicator_error'] = str(e)
+            score = basic_score
+            details['score'] = round(score, 3)
+            details['mode'] = 'basic_fallback'
+    else:
+        # Use basic score if no historical data
+        score = basic_score
+        details['score'] = round(score, 3)
+        details['mode'] = 'basic'
+
+    return score, details
+
+
+def score_etf(symbol: str, current_price: float, open_price: float,
+              prev_close: float, high: float, low: float,
+              current_volume: float = None, avg_volume: float = None,
+              sector_performance: Dict[str, float] = None) -> Tuple[float, Dict]:
+    """
+    Score ETF (Exchange-Traded Fund) trading opportunities
+    ETFs track indices, sectors, or commodities
+
+    Args:
+        symbol: ETF symbol (e.g., 'SPY', 'QQQ', 'IWM', 'GLD')
+        current_price: Current price
+        open_price: Opening price
+        prev_close: Previous close price
+        high: High price
+        low: Low price
+        current_volume: Current volume
+        avg_volume: Average volume
+        sector_performance: Optional dict of sector performances
+
+    Returns:
+        Tuple of (score, details dict)
+    """
+    details = {}
+
+    # Common ETF symbols (can be expanded)
+    etf_indicators = ['SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EFA', 'GLD', 'SLV',
+                      'USO', 'TLT', 'HYG', 'LQD', 'VXX', 'XLE', 'XLF', 'XLK',
+                      'XLV', 'XLI', 'XLP', 'XLY', 'XLB', 'XLU', 'XLRE', 'XLC']
+
+    is_etf = symbol in etf_indicators or symbol.startswith('X') or symbol.endswith('ETF')
+    details['is_etf'] = is_etf
+
+    if not is_etf:
+        # Still score but note it may not be an ETF
+        details['note'] = 'symbol_not_in_etf_list'
+
+    # 1. Price momentum
+    intraday_change = (current_price - open_price) / open_price if open_price > 0 else 0
+    details['intraday_change_pct'] = round(intraday_change * 100, 2)
+
+    # 2. Gap from previous close
+    gap = (open_price - prev_close) / prev_close if prev_close > 0 else 0
+    details['gap_pct'] = round(gap * 100, 2)
+
+    # 3. Position in daily range
+    price_range = high - low
+    if price_range > 0:
+        position_in_range = (current_price - low) / price_range
+    else:
+        position_in_range = 0.5
+    details['position_in_range'] = round(position_in_range, 2)
+
+    # 4. Trend strength
+    trend = (current_price - prev_close) / prev_close if prev_close > 0 else 0
+    details['trend_pct'] = round(trend * 100, 2)
+
+    # 5. Volume analysis (ETFs should have strong volume)
+    volume_score = 0.5
+    if current_volume and avg_volume and avg_volume > 0:
+        volume_ratio = current_volume / avg_volume
+        details['volume_ratio'] = round(volume_ratio, 2)
+
+        # Higher volume = better liquidity and confidence
+        if volume_ratio > 1.5:
+            volume_score = 0.7
+        elif volume_ratio > 1.0:
+            volume_score = 0.6
+        elif volume_ratio < 0.5:
+            volume_score = 0.3  # Low volume is concerning for ETFs
+        else:
+            volume_score = 0.4
+
+    details['volume_score'] = round(volume_score, 2)
+
+    # 6. ETF-specific scoring
+    # ETFs are generally less volatile than individual stocks
+    # Look for steady trends with good volume
+
+    # Base score on momentum and trend
+    momentum_component = intraday_change * 3.0
+    trend_component = trend * 2.0
+    position_component = (position_in_range - 0.5) * 0.2
+    gap_component = gap * 1.5
+
+    raw_score = 0.5 + momentum_component + trend_component + position_component + gap_component
+
+    # Adjust by volume (critical for ETFs)
+    raw_score = raw_score * (0.5 + volume_score * 0.5)
+
+    # Normalize to 0-1
+    score = max(0.0, min(1.0, raw_score))
+
+    details['raw_score'] = round(raw_score, 3)
+    details['score'] = round(score, 3)
+
+    # 7. Sector rotation signal (if provided)
+    if sector_performance:
+        # Check if this ETF's sector is outperforming
+        etf_sector_map = {
+            'XLE': 'energy', 'XLF': 'financials', 'XLK': 'technology',
+            'XLV': 'healthcare', 'XLI': 'industrials', 'XLP': 'consumer_staples',
+            'XLY': 'consumer_discretionary', 'XLB': 'materials',
+            'XLU': 'utilities', 'XLRE': 'real_estate', 'XLC': 'communication'
+        }
+
+        if symbol in etf_sector_map:
+            sector = etf_sector_map[symbol]
+            sector_perf = sector_performance.get(sector, 0)
+            details['sector'] = sector
+            details['sector_performance'] = round(sector_perf * 100, 2)
+
+            # Boost score if sector is strong
+            if sector_perf > 0.01:  # Sector up >1%
+                score = min(1.0, score * 1.2)
+                details['sector_boost'] = True
+            elif sector_perf < -0.01:  # Sector down >1%
+                score = score * 0.8
+                details['sector_penalty'] = True
+
+    details['final_score'] = round(score, 3)
+    return score, details
+
+
+def score_stock_candidates(snaps: Dict[str, dict], news_counts: Dict[str, int],
                           earnings: Dict[str, str]) -> Dict[str, Dict[str, float]]:
     """
     Legacy function for backward compatibility
     Scores candidates using simple momentum + news + earnings
-    
+
     Returns dict with format: {symbol: {'mover': float, 'score': float}}
     """
     out: Dict[str, Dict[str, float]] = {}
-    
+
     for sym, snap in (snaps or {}).items():
         # Get mover percentage
         mover = _mover_from_snap(snap)
-        
+
         # News boost: 0.05 per article, capped at 5 articles
         news_boost = 0.05 * min(5, int(news_counts.get(sym, 0)))
-        
+
         # Earnings boost: 0.2 if earnings upcoming
         earn_boost = 0.2 if sym in earnings else 0.0
-        
+
         # Combined score: base 0.5, momentum scaled by 4x, plus boosts
         score = max(0.0, min(1.0, 0.5 + 4.0 * mover + news_boost + earn_boost))
-        
+
         out[sym] = {
-            "mover": mover, 
+            "mover": mover,
             "score": score
         }
-    
+
     return out
 
 
 # Export all scoring functions for use by StrategyManager
 __all__ = [
     'score_momentum',
-    'score_mean_reversion', 
+    'score_mean_reversion',
     'score_news',
     'score_volume',
     'score_earnings',
     'score_longterm_trend',
     'score_longterm_momentum',
     'score_crypto',
+    'score_forex',
+    'score_etf',
     'score_stock_candidates'
 ]
