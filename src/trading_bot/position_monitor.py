@@ -52,6 +52,9 @@ class PositionMonitor:
         # Position metadata: symbol -> strategy info
         self.position_metadata: Dict[str, Dict] = {}
 
+        # Track symbols where stop order creation has failed (to avoid repeated attempts)
+        self.failed_stop_order_symbols: set = set()
+
         # Threading
         self._monitor_thread = None
         self._running = False
@@ -91,6 +94,8 @@ class PositionMonitor:
         if symbol in self.position_metadata:
             del self.position_metadata[symbol]
             self.logger.debug(f"Unregistered position metadata for {symbol}")
+        # Also remove from failed stop order tracking
+        self.failed_stop_order_symbols.discard(symbol)
 
     def start(self):
         """Start the position monitoring loop"""
@@ -383,11 +388,12 @@ class PositionMonitor:
                     symbol, qty, old_order_id, old_stop_price, new_stop_price, profit_pct
                 )
         else:
-            # No stop order found - this shouldn't happen, but create one as safety
-            self.logger.warning(
-                f"No stop order found for {symbol}, creating protective stop"
-            )
-            self._create_missing_stop_order(symbol, qty, new_stop_price)
+            # No stop order found - check if we've already tried and failed for this symbol
+            if symbol not in self.failed_stop_order_symbols:
+                self.logger.warning(
+                    f"No stop order found for {symbol}, creating protective stop"
+                )
+                self._create_missing_stop_order(symbol, qty, new_stop_price)
 
     def _calculate_dynamic_stop_price(
         self,
@@ -520,12 +526,16 @@ class PositionMonitor:
                     f"CRITICAL: Failed to create safety stop for {symbol}! "
                     f"Position is unprotected."
                 )
+                # Mark this symbol as failed to avoid repeated attempts
+                self.failed_stop_order_symbols.add(symbol)
 
         except Exception as e:
             self.logger.error(
                 f"Error creating safety stop for {symbol}: {e}",
                 exc_info=True
             )
+            # Mark this symbol as failed to avoid repeated attempts
+            self.failed_stop_order_symbols.add(symbol)
 
     def _execute_take_profit(
         self,
