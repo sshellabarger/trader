@@ -288,9 +288,9 @@ class AlpacaBroker:
         }
 
         if limit_price:
-            data['limit_price'] = str(limit_price)
+            data['limit_price'] = str(round(limit_price, 2))
         if stop_price:
-            data['stop_price'] = str(stop_price)
+            data['stop_price'] = str(round(stop_price, 2))
 
         result = self._make_request('POST', url, json=data)
 
