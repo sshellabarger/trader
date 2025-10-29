@@ -97,6 +97,59 @@ class PositionMonitor:
         # Also remove from failed stop order tracking
         self.failed_stop_order_symbols.discard(symbol)
 
+    def register_existing_positions(self):
+        """
+        Register metadata for existing open positions that don't have it yet.
+        This is useful when the bot starts with open positions.
+        Uses default/conservative values for positions without registered metadata.
+        """
+        try:
+            positions = self._get_positions()
+            if not positions:
+                self.logger.debug("No existing positions to register")
+                return
+
+            registered_count = 0
+            for position in positions:
+                symbol = position.get('symbol')
+                if not symbol:
+                    continue
+
+                # Skip if already registered
+                if symbol in self.position_metadata:
+                    self.logger.debug(f"{symbol} already has metadata, skipping")
+                    continue
+
+                # Register with conservative default values
+                entry_price = float(position.get('avg_entry_price', 0))
+                if entry_price <= 0:
+                    self.logger.warning(f"Invalid entry price for {symbol}, skipping registration")
+                    continue
+
+                # Use conservative defaults for unknown positions
+                default_stop_loss_pct = self.settings.get('thresholds', {}).get('default_stop_loss_pct', 1.0)
+                default_take_profit_pct = self.settings.get('thresholds', {}).get('default_take_profit_pct', 3.0)
+
+                self.register_position(
+                    symbol=symbol,
+                    primary_strategy='existing',  # Mark as existing/pre-loaded position
+                    entry_price=entry_price,
+                    stop_loss_pct=default_stop_loss_pct,
+                    take_profit_pct=default_take_profit_pct
+                )
+                registered_count += 1
+
+                self.logger.info(
+                    f"Registered existing position {symbol} with default parameters: "
+                    f"entry=${entry_price:.2f}, stop={default_stop_loss_pct}%, target={default_take_profit_pct}%"
+                )
+
+            if registered_count > 0:
+                self.logger.info(f"Registered {registered_count} existing position(s) with default metadata")
+
+        except Exception as e:
+            self.logger.error(f"Error registering existing positions: {e}", exc_info=True)
+
     def start(self):
         """Start the position monitoring loop"""
         if self._running:
@@ -105,6 +158,13 @@ class PositionMonitor:
 
         self._running = True
         self._stop_event.clear()
+
+        # Register any existing positions before starting monitoring
+        try:
+            self.logger.info("Checking for existing open positions...")
+            self.register_existing_positions()
+        except Exception as e:
+            self.logger.error(f"Error during initial position registration: {e}", exc_info=True)
 
         # Start monitoring thread
         self._monitor_thread = threading.Thread(

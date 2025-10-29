@@ -133,16 +133,34 @@ async def api_positions():
                 positions = _broker_instance.list_positions() if hasattr(_broker_instance, 'list_positions') else _broker_instance.get_positions()
                 if positions:
                     logger.debug(f"Got {len(positions)} positions from broker")
-                    # Enrich with strategy metadata if available
-                    if _position_monitor_instance and hasattr(_position_monitor_instance, 'position_metadata'):
-                        for pos in positions:
-                            symbol = pos.get('symbol')
+                    # Enrich all positions with strategy metadata and ensure required fields
+                    for pos in positions:
+                        symbol = pos.get('symbol')
+
+                        # Initialize with defaults
+                        if 'primary_strategy' not in pos:
+                            pos['primary_strategy'] = 'manual'  # Default for positions without metadata
+                        if 'entry_price' not in pos:
+                            pos['entry_price'] = pos.get('avg_entry_price', 0)
+                        if 'stop_loss_pct' not in pos:
+                            pos['stop_loss_pct'] = 0
+                        if 'take_profit_pct' not in pos:
+                            pos['take_profit_pct'] = 0
+
+                        # Enrich with strategy metadata if available
+                        if _position_monitor_instance and hasattr(_position_monitor_instance, 'position_metadata'):
                             if symbol and symbol in _position_monitor_instance.position_metadata:
                                 metadata = _position_monitor_instance.position_metadata[symbol]
-                                pos['primary_strategy'] = metadata.get('primary_strategy', 'unknown')
-                                pos['entry_price'] = metadata.get('entry_price')
-                                pos['stop_loss_pct'] = metadata.get('stop_loss_pct')
-                                pos['take_profit_pct'] = metadata.get('take_profit_pct')
+                                pos['primary_strategy'] = metadata.get('primary_strategy', 'manual')
+                                # Use metadata entry_price if available, otherwise keep avg_entry_price
+                                if metadata.get('entry_price'):
+                                    pos['entry_price'] = metadata.get('entry_price')
+                                pos['stop_loss_pct'] = metadata.get('stop_loss_pct', 0)
+                                pos['take_profit_pct'] = metadata.get('take_profit_pct', 0)
+                                logger.debug(f"Enriched {symbol} with strategy: {pos['primary_strategy']}")
+                            else:
+                                logger.debug(f"No metadata found for {symbol}, using defaults")
+
                     return {"positions": positions if isinstance(positions, list) else []}
             except Exception as e:
                 logger.warning(f"Couldn't get positions from broker: {e}")
@@ -162,6 +180,17 @@ async def api_positions():
         # Ensure it's a list
         if not isinstance(positions, list):
             positions = []
+
+        # Ensure all positions have required fields
+        for pos in positions:
+            if 'primary_strategy' not in pos:
+                pos['primary_strategy'] = 'manual'
+            if 'entry_price' not in pos:
+                pos['entry_price'] = pos.get('avg_entry_price', 0)
+            if 'stop_loss_pct' not in pos:
+                pos['stop_loss_pct'] = 0
+            if 'take_profit_pct' not in pos:
+                pos['take_profit_pct'] = 0
 
         logger.debug(f"Returning {len(positions)} positions to UI")
         return {"positions": positions}
