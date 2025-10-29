@@ -87,13 +87,23 @@ STRATEGY_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
 
     "crypto": {
-        'entry_threshold': 0.55,       # Moderate threshold for crypto
-        'exit_threshold': 0.35,        # Exit when signal weakens
-        'stop_loss_pct': 2.0,          # Much wider stop - crypto is volatile
-        'take_profit_pct': 5.0,        # Large targets - crypto moves big
-        'max_hold_minutes': 360,       # 6 hours - crypto trades 24/7
-        'default_duration': 120,       # 2 hour test window
-        'position_size_pct': 1.5,      # Smaller size due to volatility
+        'entry_threshold': 0.60,       # Higher threshold with advanced indicators
+        'exit_threshold': 0.40,        # Exit when signal weakens significantly
+        'stop_loss_pct': 2.5,          # Wide stop - crypto is very volatile
+        'take_profit_pct': 6.0,        # Large targets - crypto can move 5-10%
+        'max_hold_minutes': 480,       # 8 hours - crypto trades 24/7
+        'default_duration': 180,       # 3 hour test window
+        'position_size_pct': 1.2,      # Conservative size due to volatility
+
+        # Crypto-specific parameters
+        'use_advanced_indicators': True,  # Enable RSI, MACD, Bollinger Bands
+        'min_rsi': 30,                    # Don't buy if RSI < 30 (oversold extreme)
+        'max_rsi': 80,                    # Don't buy if RSI > 80 (overbought extreme)
+        'require_volume_confirmation': True,  # Require volume > average
+        'min_volume_ratio': 0.8,          # Minimum volume ratio (80% of average)
+        'volatility_adjustment': True,    # Adjust position size by volatility
+        'trailing_stop_activation': 3.0,  # Activate trailing stop at 3% profit
+        'trailing_stop_distance': 1.5,    # Trail by 1.5%
     },
 }
 
