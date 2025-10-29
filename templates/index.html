@@ -1847,19 +1847,25 @@
                 modalTitle.textContent = `${symbol} - Position Details`;
                 console.log('Modal title set');
 
-                // Calculate additional metrics
-                const entryPrice = position.entry_price || position.avg_entry_price || 0;
-                const currentPrice = position.current_price || 0;
-                const qty = position.qty || 0;
-                const marketValue = position.market_value || 0;
-                const unrealizedPL = position.unrealized_pl || 0;
-                const unrealizedPLPct = position.unrealized_plpc || 0;
+                // Calculate additional metrics - ensure all numeric values are properly converted
+                const entryPrice = parseFloat(position.entry_price || position.avg_entry_price || 0) || 0;
+                const currentPrice = parseFloat(position.current_price || 0) || 0;
+                const qty = parseFloat(position.qty || 0) || 0;
+                const marketValue = parseFloat(position.market_value || 0) || 0;
+                const unrealizedPL = parseFloat(position.unrealized_pl || 0) || 0;
+                const unrealizedPLPct = parseFloat(position.unrealized_plpc || 0) || 0;
                 const side = position.side || 'long';
                 const strategy = position.primary_strategy || 'unknown';
-                const stopLossPct = position.stop_loss_pct || 0;
-                const takeProfitPct = position.take_profit_pct || 0;
+                const stopLossPct = parseFloat(position.stop_loss_pct || 0) || 0;
+                const takeProfitPct = parseFloat(position.take_profit_pct || 0) || 0;
 
-                console.log('Calculated metrics:', { entryPrice, currentPrice, qty, marketValue, unrealizedPL, strategy });
+                console.log('Calculated metrics:', {
+                    entryPrice, currentPrice, qty, marketValue, unrealizedPL, unrealizedPLPct, strategy,
+                    types: {
+                        entryPrice: typeof entryPrice,
+                        unrealizedPLPct: typeof unrealizedPLPct
+                    }
+                });
 
             // Calculate stop loss and take profit prices if available
             let stopLossPrice = null;
