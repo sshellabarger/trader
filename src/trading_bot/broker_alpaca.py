@@ -14,6 +14,13 @@ class AlpacaBroker:
     Renamed from BrokerAlpaca to match engine.py import
     """
 
+    # Known crypto base currencies
+    CRYPTO_BASES = {'BTC', 'ETH', 'SOL', 'AVAX', 'MATIC', 'LINK', 'UNI', 'AAVE', 'DOT', 'DOGE',
+                    'ADA', 'XRP', 'LTC', 'BCH', 'XLM', 'ALGO', 'ATOM', 'FIL', 'VET', 'TRX'}
+
+    # Known forex currencies
+    FOREX_CURRENCIES = {'EUR', 'GBP', 'USD', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD'}
+
     def __init__(self, key=None, secret=None, paper=True, timeout=6.0, data_feed='iex', logger=None):
         self.key = key or os.getenv('ALPACA_API_KEY_ID')
         self.secret = secret or os.getenv('ALPACA_API_SECRET_KEY')
@@ -37,6 +44,37 @@ class AlpacaBroker:
         }
 
         self.logger.info(f"Alpaca broker initialized (paper={paper}, feed={data_feed})")
+
+    def _classify_symbol(self, symbol: str) -> str:
+        """
+        Classify symbol as 'stock', 'crypto', or 'forex'
+
+        Args:
+            symbol: Symbol to classify
+
+        Returns:
+            'stock', 'crypto', or 'forex'
+        """
+        if '/' not in symbol:
+            return 'stock'
+
+        # Split the pair
+        parts = symbol.split('/')
+        if len(parts) != 2:
+            return 'stock'
+
+        base, quote = parts
+
+        # If base is a known crypto, it's crypto
+        if base in self.CRYPTO_BASES:
+            return 'crypto'
+
+        # If both parts are forex currencies, it's forex
+        if base in self.FOREX_CURRENCIES and quote in self.FOREX_CURRENCIES:
+            return 'forex'
+
+        # Default to crypto for other slash-separated pairs
+        return 'crypto'
 
     def _make_request(self, method: str, url: str, **kwargs) -> Optional[Dict]:
         """Make HTTP request with error handling"""
@@ -164,9 +202,15 @@ class AlpacaBroker:
                         }
                     }
                     snapshots[symbol] = snapshot
-                    self.logger.debug(f"Got crypto snapshot for {symbol}")
+                    symbol_type = self._classify_symbol(symbol)
+                    self.logger.debug(f"Got {symbol_type} snapshot for {symbol}")
                 else:
-                    self.logger.warning(f"No crypto data for {symbol}")
+                    # Determine symbol type for better error message
+                    symbol_type = self._classify_symbol(symbol)
+                    if symbol_type == 'forex':
+                        self.logger.warning(f"No data for forex pair {symbol} (may not be supported by Alpaca)")
+                    else:
+                        self.logger.warning(f"No {symbol_type} data for {symbol}")
 
             except Exception as e:
                 self.logger.error(f"Error getting crypto snapshot for {symbol}: {e}")
@@ -180,17 +224,17 @@ class AlpacaBroker:
         Routes to the appropriate batch method based on symbol type.
 
         Args:
-            symbol: Stock symbol (e.g., 'AAPL') or crypto pair (e.g., 'BTC/USD')
+            symbol: Stock symbol (e.g., 'AAPL'), crypto pair (e.g., 'BTC/USD'), or forex pair (e.g., 'EUR/USD')
 
         Returns:
             Snapshot data dict or None if not available
         """
-        # Determine if it's crypto based on symbol format
-        is_crypto = '/' in symbol or symbol.upper().endswith('USD')
+        # Classify the symbol
+        symbol_type = self._classify_symbol(symbol)
 
         try:
-            if is_crypto:
-                # Use crypto batch method
+            if symbol_type in ['crypto', 'forex']:
+                # Alpaca uses crypto endpoint for both crypto and forex
                 snapshots = self.snapshots_batch_crypto([symbol])
             else:
                 # Use stock batch method
@@ -208,21 +252,23 @@ class AlpacaBroker:
 
     def get_batch_snapshots(self, symbols: List[str]) -> Dict:
         """
-        Get batch snapshots for mixed stock and crypto symbols
+        Get batch snapshots for mixed stock, crypto, and forex symbols
         Automatically routes to appropriate endpoint
         """
         if not symbols:
             return {}
 
-        # Separate stocks and crypto
+        # Separate stocks from crypto/forex
         stocks = []
-        crypto = []
+        crypto_and_forex = []
 
         for symbol in symbols:
-            if '/' in symbol or symbol.upper().endswith('USD'):
-                crypto.append(symbol)
-            else:
+            symbol_type = self._classify_symbol(symbol)
+            if symbol_type == 'stock':
                 stocks.append(symbol)
+            else:
+                # Both crypto and forex use the crypto endpoint in Alpaca
+                crypto_and_forex.append(symbol)
 
         all_snapshots = {}
 
@@ -231,9 +277,9 @@ class AlpacaBroker:
             stock_snaps = self.snapshots_batch_stocks(stocks)
             all_snapshots.update(stock_snaps)
 
-        # Get crypto snapshots
-        if crypto:
-            crypto_snaps = self.snapshots_batch_crypto(crypto)
+        # Get crypto/forex snapshots
+        if crypto_and_forex:
+            crypto_snaps = self.snapshots_batch_crypto(crypto_and_forex)
             all_snapshots.update(crypto_snaps)
 
         return all_snapshots
