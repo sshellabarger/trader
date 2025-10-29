@@ -1801,11 +1801,18 @@
         }
 
         function openPositionModal(symbol) {
+            console.log(`Opening position modal for ${symbol}`);
+            console.log('Available positions:', positionsData.length);
+
             const position = positionsData.find(p => p.symbol === symbol);
             if (!position) {
-                console.error('Position not found:', symbol);
+                console.error(`Position not found for symbol: ${symbol}`);
+                console.error('Available symbols:', positionsData.map(p => p.symbol));
+                alert(`Error: Could not find position data for ${symbol}`);
                 return;
             }
+
+            console.log('Position data:', position);
 
             // Set modal title
             document.getElementById('positionModalTitle').textContent = `${symbol} - Position Details`;
