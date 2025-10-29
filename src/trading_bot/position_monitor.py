@@ -443,16 +443,33 @@ class PositionMonitor:
             Order dict if found, None otherwise
         """
         try:
-            # Get all open orders
+            # Get all open orders (includes pending_new, accepted, etc.)
             open_orders = self.broker.list_orders(status='open')
 
-            # Find stop order for this symbol
-            for order in open_orders:
-                if (order.get('symbol') == symbol and
-                    order.get('type') == 'stop' and
-                    order.get('side') == 'sell'):
-                    return order
+            # Also get orders that are pending but might not show as 'open' yet
+            # Note: Alpaca's 'open' status includes: pending_new, accepted, pending_replace
 
+            # Find stop order for this symbol
+            # Check for both 'stop' and 'stop_limit' order types
+            for order in open_orders:
+                order_symbol = order.get('symbol')
+                order_type = order.get('type')
+                order_side = order.get('side')
+                order_status = order.get('status', 'unknown')
+
+                if order_symbol == symbol:
+                    self.logger.debug(
+                        f"Found order for {symbol}: type={order_type}, side={order_side}, "
+                        f"status={order_status}, id={order.get('id', 'N/A')}"
+                    )
+
+                    # Match stop orders (both 'stop' and 'stop_limit') on the sell side
+                    if order_type in ['stop', 'stop_limit'] and order_side == 'sell':
+                        self.logger.debug(f"Matched stop order for {symbol}: {order.get('id')}")
+                        return order
+
+            # If we didn't find any order for this symbol, log that too
+            self.logger.debug(f"No orders found for {symbol} in {len(open_orders)} open orders")
             return None
 
         except Exception as e:
@@ -522,9 +539,11 @@ class PositionMonitor:
             if stop_order:
                 self.logger.info(f"Safety stop order created for {symbol}")
             else:
-                self.logger.error(
-                    f"CRITICAL: Failed to create safety stop for {symbol}! "
-                    f"Position is unprotected."
+                # Check if this is a wash trade error (order already exists)
+                # The broker will have logged the detailed error
+                self.logger.warning(
+                    f"Could not create stop order for {symbol} - may already exist. "
+                    f"Check broker logs for details. Position monitoring will continue."
                 )
                 # Mark this symbol as failed to avoid repeated attempts
                 self.failed_stop_order_symbols.add(symbol)

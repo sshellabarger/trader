@@ -322,6 +322,10 @@ class AlpacaBroker:
         url = f"{self.base_url}/v2/orders"
         params = {'status': status}
         result = self._make_request('GET', url, params=params)
+        if result:
+            self.logger.debug(f"Retrieved {len(result)} orders with status={status}")
+        else:
+            self.logger.debug(f"No orders found with status={status}")
         return result if result else []
 
     def close_position(self, symbol: str) -> Optional[Dict]:
