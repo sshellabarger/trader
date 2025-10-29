@@ -60,6 +60,37 @@ class PositionMonitor:
         self._running = False
         self._stop_event = threading.Event()
 
+        # Load persisted position metadata on initialization
+        self._load_position_metadata()
+
+    def _load_position_metadata(self):
+        """Load position metadata from persistent storage"""
+        try:
+            from .state import get_kv
+            metadata_json = get_kv('position_metadata')
+            if metadata_json:
+                import json
+                self.position_metadata = json.loads(metadata_json)
+                self.logger.info(f"Loaded position metadata for {len(self.position_metadata)} positions from storage")
+                for symbol, meta in self.position_metadata.items():
+                    self.logger.debug(
+                        f"  {symbol}: strategy={meta.get('primary_strategy')}, "
+                        f"entry=${meta.get('entry_price'):.2f}"
+                    )
+        except Exception as e:
+            self.logger.warning(f"Could not load position metadata: {e}")
+            self.position_metadata = {}
+
+    def _save_position_metadata(self):
+        """Save position metadata to persistent storage"""
+        try:
+            from .state import set_kv
+            import json
+            set_kv('position_metadata', json.dumps(self.position_metadata))
+            self.logger.debug(f"Saved position metadata for {len(self.position_metadata)} positions")
+        except Exception as e:
+            self.logger.warning(f"Could not save position metadata: {e}")
+
     def register_position(
         self,
         symbol: str,
@@ -89,11 +120,16 @@ class PositionMonitor:
             f"strategy={primary_strategy}, stop={stop_loss_pct}%, target={take_profit_pct}%"
         )
 
+        # Persist to storage
+        self._save_position_metadata()
+
     def unregister_position(self, symbol: str):
         """Remove position metadata when position is closed"""
         if symbol in self.position_metadata:
             del self.position_metadata[symbol]
             self.logger.debug(f"Unregistered position metadata for {symbol}")
+            # Persist to storage
+            self._save_position_metadata()
         # Also remove from failed stop order tracking
         self.failed_stop_order_symbols.discard(symbol)
 
@@ -132,7 +168,7 @@ class PositionMonitor:
 
                 self.register_position(
                     symbol=symbol,
-                    primary_strategy='existing',  # Mark as existing/pre-loaded position
+                    primary_strategy='manual',  # Mark as manually opened (outside bot control)
                     entry_price=entry_price,
                     stop_loss_pct=default_stop_loss_pct,
                     take_profit_pct=default_take_profit_pct
@@ -140,8 +176,9 @@ class PositionMonitor:
                 registered_count += 1
 
                 self.logger.info(
-                    f"Registered existing position {symbol} with default parameters: "
-                    f"entry=${entry_price:.2f}, stop={default_stop_loss_pct}%, target={default_take_profit_pct}%"
+                    f"Registered untracked position {symbol} with default parameters: "
+                    f"entry=${entry_price:.2f}, stop={default_stop_loss_pct}%, target={default_take_profit_pct}% "
+                    f"(marked as 'manual' - opened outside bot)"
                 )
 
             if registered_count > 0:
@@ -161,7 +198,14 @@ class PositionMonitor:
 
         # Register any existing positions before starting monitoring
         try:
-            self.logger.info("Checking for existing open positions...")
+            loaded_count = len(self.position_metadata)
+            if loaded_count > 0:
+                self.logger.info(
+                    f"Restored metadata for {loaded_count} position(s) from storage: "
+                    f"{', '.join(self.position_metadata.keys())}"
+                )
+
+            self.logger.info("Checking for any untracked open positions...")
             self.register_existing_positions()
         except Exception as e:
             self.logger.error(f"Error during initial position registration: {e}", exc_info=True)
