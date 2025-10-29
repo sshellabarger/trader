@@ -207,6 +207,8 @@ class Trader:
         self.universe = []
         self.stock_universe = []
         self.crypto_universe = []
+        self.forex_universe = []
+        self.etf_universe = []
         self.candidates = []
         self.news_articles = []  # Changed from news_counts to news_articles
         self.earnings_data = {}
@@ -242,6 +244,8 @@ class Trader:
             'longterm_trend': StrategyType.LONGTERM_TREND,
             'longterm_momentum': StrategyType.LONGTERM_MOMENTUM,
             'crypto': StrategyType.CRYPTO,
+            'forex': StrategyType.FOREX,
+            'etf': StrategyType.ETF,
         }
 
         # If candidate has signals, find the highest scoring strategy
@@ -255,12 +259,22 @@ class Trader:
             first_strategy = candidate.active_strategies[0]
             return strategy_map.get(first_strategy, StrategyType.MOMENTUM)
 
-        # Check if crypto
+        # Fallback: classify by symbol type
         symbol = candidate.symbol if hasattr(candidate, 'symbol') else candidate.get('symbol', '')
-        if '/' in symbol or symbol.endswith('USD'):
+
+        # Check if forex pair
+        if symbol in self.forex_universe:
+            return StrategyType.FOREX
+
+        # Check if crypto
+        if symbol in self.crypto_universe:
             return StrategyType.CRYPTO
 
-        # Default to momentum
+        # Check if ETF
+        if symbol in self.etf_universe:
+            return StrategyType.ETF
+
+        # Default to momentum for stocks
         return StrategyType.MOMENTUM
 
     def initialize(self):
@@ -271,13 +285,49 @@ class Trader:
         try:
             self.universe = load_universe(self.settings)
 
-            # Separate stock and crypto universes
-            self.stock_universe = [s for s in self.universe if '/' not in s and not s.endswith('USD')]
-            self.crypto_universe = [s for s in self.universe if '/' in s or s.endswith('USD')]
+            # Classify symbols into different asset types
+            # Common forex currency codes
+            forex_currencies = ['EUR', 'GBP', 'USD', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']
+
+            # Common crypto symbols
+            crypto_symbols = ['BTC', 'ETH', 'SOL', 'AVAX', 'MATIC', 'LINK', 'UNI', 'AAVE', 'DOT', 'DOGE']
+
+            # Common ETF symbols
+            etf_symbols = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VEA', 'VWO', 'AGG', 'LQD', 'TLT',
+                          'GLD', 'SLV', 'XLE', 'XLF', 'XLV', 'XLI', 'XLK', 'XLP', 'XLU', 'XLY']
+
+            for symbol in self.universe:
+                # Check if forex pair (e.g., EUR/USD, GBP/JPY)
+                if '/' in symbol:
+                    parts = symbol.split('/')
+                    if len(parts) == 2 and all(part in forex_currencies for part in parts):
+                        self.forex_universe.append(symbol)
+                        continue
+
+                    # Check if crypto pair (e.g., BTC/USD, ETH/USD)
+                    if parts[0] in crypto_symbols and parts[1] in ['USD', 'USDT', 'USDC']:
+                        self.crypto_universe.append(symbol)
+                        continue
+
+                # Check if ETF
+                if symbol in etf_symbols:
+                    self.etf_universe.append(symbol)
+                    continue
+
+                # Check if crypto by symbol ending (e.g., BTCUSD)
+                if any(symbol.startswith(crypto) and symbol.endswith('USD') for crypto in crypto_symbols):
+                    self.crypto_universe.append(symbol)
+                    continue
+
+                # Default to stock
+                self.stock_universe.append(symbol)
 
             self.logger.info(
-                f"Loaded {len(self.universe)} symbols "
-                f"({len(self.stock_universe)} stocks, {len(self.crypto_universe)} crypto)"
+                f"Loaded {len(self.universe)} symbols: "
+                f"{len(self.stock_universe)} stocks, "
+                f"{len(self.crypto_universe)} crypto, "
+                f"{len(self.forex_universe)} forex, "
+                f"{len(self.etf_universe)} ETFs"
             )
         except Exception as e:
             self.logger.error(f"Failed to load universe: {e}")
@@ -705,18 +755,33 @@ class Trader:
             # Get batch snapshots with rate limit protection
             batch_size = self.settings.get('scheduling', {}).get('candidate_max_symbols', 100)
 
-            # Determine which universe to use
+            # Check which strategies are enabled
             crypto_enabled = self.settings.get('strategies', {}).get('crypto', False)
+            forex_enabled = self.settings.get('strategies', {}).get('forex', False)
+            etf_enabled = self.settings.get('strategies', {}).get('etf', False)
+
+            # Build symbol list based on market hours and enabled strategies
+            symbols = []
 
             if self.market_open:
-                # During market hours, prioritize stocks
-                symbols = self.stock_universe[:batch_size]
-            elif crypto_enabled:
-                # After hours with crypto enabled, use crypto
-                symbols = self.crypto_universe[:50]  # Smaller batch for crypto
+                # During market hours: trade stocks, ETFs, and optionally crypto/forex
+                symbols.extend(self.stock_universe[:batch_size])
+                if etf_enabled and len(symbols) < batch_size:
+                    symbols.extend(self.etf_universe[:max(20, batch_size - len(symbols))])
+                if crypto_enabled and len(symbols) < batch_size:
+                    symbols.extend(self.crypto_universe[:max(20, batch_size - len(symbols))])
+                if forex_enabled and len(symbols) < batch_size:
+                    symbols.extend(self.forex_universe[:max(20, batch_size - len(symbols))])
             else:
-                # After hours without crypto, still check stocks
-                symbols = self.stock_universe[:batch_size]
+                # After hours: only trade crypto and forex if enabled (24/7 markets)
+                if crypto_enabled:
+                    symbols.extend(self.crypto_universe[:50])
+                if forex_enabled:
+                    symbols.extend(self.forex_universe[:50])
+
+                # If no 24/7 strategies enabled, check stocks anyway (for pre-market data)
+                if not symbols:
+                    symbols = self.stock_universe[:batch_size]
 
             if not symbols:
                 self.logger.warning("No symbols in universe")
@@ -946,8 +1011,12 @@ class Trader:
         self.logger.info("Entering main loop...")
 
         crypto_enabled = self.settings.get('strategies', {}).get('crypto', False)
+        forex_enabled = self.settings.get('strategies', {}).get('forex', False)
+
         if crypto_enabled:
             self.logger.info("🪙 Crypto trading ENABLED - will trade 24/7")
+        if forex_enabled:
+            self.logger.info("💱 Forex trading ENABLED - will trade 24/5")
 
         try:
             while self.running:
@@ -978,11 +1047,17 @@ class Trader:
                             self.logger.info("Daily metrics initialized")
 
                     # Determine if we should trade
-                    should_trade = self.market_open or crypto_enabled
+                    # Trade if: market is open OR crypto is enabled OR forex is enabled
+                    should_trade = self.market_open or crypto_enabled or forex_enabled
 
                     if should_trade:
                         if not self.market_open:
-                            self.logger.debug("Market closed but crypto enabled - trading crypto")
+                            active_247_strategies = []
+                            if crypto_enabled:
+                                active_247_strategies.append("crypto")
+                            if forex_enabled:
+                                active_247_strategies.append("forex")
+                            self.logger.debug(f"Market closed but 24/7 trading enabled - trading {', '.join(active_247_strategies)}")
                         else:
                             self.logger.debug("Market is open - checking trades")
 
@@ -998,7 +1073,7 @@ class Trader:
                         self.check_entries()
                     else:
                         if loop_count % 20 == 1:
-                            self.logger.info("Market is closed, waiting... (Enable crypto in settings to trade 24/7)")
+                            self.logger.info("Market is closed, waiting... (Enable crypto/forex in settings to trade 24/7)")
                         self.daily_initialized = False
 
                 except Exception as e:
