@@ -460,33 +460,39 @@ class StrategyManager:
                 # News signal
                 if self.strategies_enabled.get('news', True):
                     score, details = self.score_news(symbol, news_data)
+                    # News only matches regime when it has meaningful signal
+                    regime_match = score > 0.3
                     signals.append(SignalResult(
                         strategy_name='news',
                         score=score,
                         confidence=self.strategy_confidence.get('news', 0.70),
-                        regime_match=True,
+                        regime_match=regime_match,
                         details=details
                     ))
 
                 # Volume signal
                 if self.strategies_enabled.get('volume', True):
                     score, details = self.score_volume(volume, avg_volume)
+                    # Volume only matches regime when it shows significant activity
+                    regime_match = score > 0.6
                     signals.append(SignalResult(
                         strategy_name='volume',
                         score=score,
                         confidence=self.strategy_confidence.get('volume', 0.70),
-                        regime_match=True,
+                        regime_match=regime_match,
                         details=details
                     ))
 
                 # Earnings signal
                 if self.strategies_enabled.get('earnings', False):
                     score, details = self.score_earnings(symbol, earnings_calendar)
+                    # Earnings only matches regime when event is imminent
+                    regime_match = score > 0.5
                     signals.append(SignalResult(
                         strategy_name='earnings',
                         score=score,
                         confidence=self.strategy_confidence.get('earnings', 0.75),
-                        regime_match=True,
+                        regime_match=regime_match,
                         details=details
                     ))
 
@@ -517,11 +523,13 @@ class StrategyManager:
                 # Crypto signal
                 if self.strategies_enabled.get('crypto', False) and is_crypto:
                     score, details = self.score_crypto(symbol, current_price, open_price, prev_close, high, low)
+                    # Crypto only matches regime when showing strong signal
+                    regime_match = score > 0.5
                     signals.append(SignalResult(
                         strategy_name='crypto',
                         score=score,
                         confidence=self.strategy_confidence.get('crypto', 0.60),
-                        regime_match=True,
+                        regime_match=regime_match,
                         details=details
                     ))
 
