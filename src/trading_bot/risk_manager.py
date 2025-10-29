@@ -27,7 +27,7 @@ class Position:
     market_value: float
     unrealized_pl: float
     unrealized_plpc: float
-    side: str = "long"
+    side: str  # "long" or "short" - no default, must be specified
     entry_time: Optional[datetime] = None
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
@@ -196,31 +196,54 @@ class RiskManager:
         
         # Check individual position stop losses
         for pos in positions:
-            # Track highest price for trailing stops
-            if pos.symbol not in self.position_highs:
-                self.position_highs[pos.symbol] = pos.current_price
+            is_long = pos.side == "long"
+
+            # Track highest/lowest prices for trailing stops
+            if is_long:
+                # For longs, track highest price
+                if pos.symbol not in self.position_highs:
+                    self.position_highs[pos.symbol] = pos.current_price
+                else:
+                    self.position_highs[pos.symbol] = max(
+                        self.position_highs[pos.symbol],
+                        pos.current_price
+                    )
             else:
-                self.position_highs[pos.symbol] = max(
-                    self.position_highs[pos.symbol],
-                    pos.current_price
-                )
-            
-            # Fixed stop loss
-            if pos.stop_loss_price and pos.current_price <= pos.stop_loss_price:
-                self.logger.warning(
-                    f"STOP LOSS: {pos.symbol} at ${pos.current_price:.2f} "
-                    f"<= ${pos.stop_loss_price:.2f}"
-                )
-                to_close.append((
-                    pos.symbol,
-                    "fixed_stop_loss",
-                    {
-                        'current_price': pos.current_price,
-                        'stop_price': pos.stop_loss_price,
-                        'pl_pct': pos.unrealized_plpc
-                    }
-                ))
-                continue
+                # For shorts, track lowest price (for trailing stop)
+                if pos.symbol not in self.position_highs:
+                    self.position_highs[pos.symbol] = pos.current_price
+                else:
+                    self.position_highs[pos.symbol] = min(
+                        self.position_highs[pos.symbol],
+                        pos.current_price
+                    )
+
+            # Fixed stop loss (different logic for long vs short)
+            if pos.stop_loss_price:
+                stop_hit = False
+                if is_long and pos.current_price <= pos.stop_loss_price:
+                    stop_hit = True
+                    comparison = "<="
+                elif not is_long and pos.current_price >= pos.stop_loss_price:
+                    stop_hit = True
+                    comparison = ">="
+
+                if stop_hit:
+                    self.logger.warning(
+                        f"STOP LOSS ({pos.side}): {pos.symbol} at ${pos.current_price:.2f} "
+                        f"{comparison} ${pos.stop_loss_price:.2f}"
+                    )
+                    to_close.append((
+                        pos.symbol,
+                        "fixed_stop_loss",
+                        {
+                            'current_price': pos.current_price,
+                            'stop_price': pos.stop_loss_price,
+                            'pl_pct': pos.unrealized_plpc,
+                            'side': pos.side
+                        }
+                    ))
+                    continue
             
             # Percentage-based stop loss
             pl_pct = pos.unrealized_plpc
@@ -241,27 +264,52 @@ class RiskManager:
                 ))
                 continue
             
-            # Trailing stop loss
+            # Trailing stop loss (different logic for long vs short)
             if self.trailing_stop_enabled:
-                high_price = self.position_highs[pos.symbol]
-                trailing_stop_price = high_price * (1 - self.trailing_stop_pct / 100.0)
-                
-                if pos.current_price <= trailing_stop_price:
-                    self.logger.info(
-                        f"TRAILING STOP: {pos.symbol} at ${pos.current_price:.2f}, "
-                        f"high was ${high_price:.2f}, stop at ${trailing_stop_price:.2f}"
-                    )
-                    to_close.append((
-                        pos.symbol,
-                        "trailing_stop",
-                        {
-                            'current_price': pos.current_price,
-                            'high_price': high_price,
-                            'trailing_stop_price': trailing_stop_price,
-                            'pl_pct': pos.unrealized_plpc
-                        }
-                    ))
-                    continue
+                if is_long:
+                    # Long: trailing stop below highest price
+                    high_price = self.position_highs[pos.symbol]
+                    trailing_stop_price = high_price * (1 - self.trailing_stop_pct / 100.0)
+
+                    if pos.current_price <= trailing_stop_price:
+                        self.logger.info(
+                            f"TRAILING STOP (long): {pos.symbol} at ${pos.current_price:.2f}, "
+                            f"high was ${high_price:.2f}, stop at ${trailing_stop_price:.2f}"
+                        )
+                        to_close.append((
+                            pos.symbol,
+                            "trailing_stop",
+                            {
+                                'current_price': pos.current_price,
+                                'extreme_price': high_price,
+                                'trailing_stop_price': trailing_stop_price,
+                                'pl_pct': pos.unrealized_plpc,
+                                'side': 'long'
+                            }
+                        ))
+                        continue
+                else:
+                    # Short: trailing stop above lowest price
+                    low_price = self.position_highs[pos.symbol]  # tracks lowest for shorts
+                    trailing_stop_price = low_price * (1 + self.trailing_stop_pct / 100.0)
+
+                    if pos.current_price >= trailing_stop_price:
+                        self.logger.info(
+                            f"TRAILING STOP (short): {pos.symbol} at ${pos.current_price:.2f}, "
+                            f"low was ${low_price:.2f}, stop at ${trailing_stop_price:.2f}"
+                        )
+                        to_close.append((
+                            pos.symbol,
+                            "trailing_stop",
+                            {
+                                'current_price': pos.current_price,
+                                'extreme_price': low_price,
+                                'trailing_stop_price': trailing_stop_price,
+                                'pl_pct': pos.unrealized_plpc,
+                                'side': 'short'
+                            }
+                        ))
+                        continue
             
             # Time-based exit
             if pos.entry_time:

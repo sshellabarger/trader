@@ -97,7 +97,8 @@ class PositionMonitor:
         primary_strategy: str,
         entry_price: float,
         stop_loss_pct: float,
-        take_profit_pct: float
+        take_profit_pct: float,
+        side: str = 'long'
     ):
         """
         Register position metadata for dynamic stop management
@@ -108,15 +109,17 @@ class PositionMonitor:
             entry_price: Entry price
             stop_loss_pct: Strategy-specific stop-loss percentage
             take_profit_pct: Strategy-specific take-profit percentage
+            side: Position side - 'long' or 'short'
         """
         self.position_metadata[symbol] = {
             'primary_strategy': primary_strategy,
             'entry_price': entry_price,
             'stop_loss_pct': stop_loss_pct,
-            'take_profit_pct': take_profit_pct
+            'take_profit_pct': take_profit_pct,
+            'side': side
         }
         self.logger.debug(
-            f"Registered position metadata for {symbol}: "
+            f"Registered position metadata for {symbol} ({side}): "
             f"strategy={primary_strategy}, stop={stop_loss_pct}%, target={take_profit_pct}%"
         )
 
@@ -427,7 +430,7 @@ class PositionMonitor:
 
     def _check_position_stop_loss(self, position: Dict):
         """
-        ENHANCED: Dynamic stop-loss management with trailing behavior
+        ENHANCED: Dynamic stop-loss management with trailing behavior for BOTH long and short positions
 
         Instead of just checking if stop hit, this method:
         1. Calculates optimal stop price based on current profit
@@ -438,7 +441,7 @@ class PositionMonitor:
         - Losing/flat: Maintain original strategy stop distance
         - Profitable > 0.5%: Move stop to breakeven
         - Profitable > 1.5%: Trail at 50% of current profit
-        - Profitable > take_profit_pct: Execute market sell
+        - Profitable > take_profit_pct: Execute market sell/buy (depending on position side)
 
         Args:
             position: Position dict with symbol, qty, avg_entry_price, current_price
@@ -452,13 +455,26 @@ class PositionMonitor:
         if not symbol or entry_price <= 0 or current_price <= 0 or qty == 0:
             return
 
-        # Only check long positions (qty > 0) for now
-        if qty < 0:
-            self.logger.debug(f"Skipping short position {symbol} - not implemented")
-            return
+        # Determine if this is a long or short position
+        # Positive qty = long, negative qty = short
+        is_long = qty > 0
+        qty = abs(qty)  # Work with absolute quantity
+
+        # Get position metadata to confirm side
+        metadata = self.position_metadata.get(symbol, {})
+        metadata_side = metadata.get('side', 'long')
+
+        # Use metadata side if available, otherwise infer from qty
+        if metadata_side == 'short':
+            is_long = False
 
         # Calculate current profit percentage
-        profit_pct = ((current_price - entry_price) / entry_price) * 100
+        # For longs: profit when price goes up
+        # For shorts: profit when price goes down
+        if is_long:
+            profit_pct = ((current_price - entry_price) / entry_price) * 100
+        else:
+            profit_pct = ((entry_price - current_price) / entry_price) * 100
 
         # Get strategy-specific parameters for this position
         metadata = self.position_metadata.get(symbol, {})
@@ -468,13 +484,13 @@ class PositionMonitor:
         # Check take-profit first (manual execution via market order)
         if profit_pct >= strategy_take_profit_pct:
             self._execute_take_profit(
-                symbol, qty, entry_price, current_price, profit_pct, strategy_take_profit_pct
+                symbol, qty, entry_price, current_price, profit_pct, strategy_take_profit_pct, is_long
             )
             return
 
         # Calculate new stop price based on profit level (Option B logic)
         new_stop_price = self._calculate_dynamic_stop_price(
-            entry_price, current_price, profit_pct, strategy_stop_loss_pct
+            entry_price, current_price, profit_pct, strategy_stop_loss_pct, is_long
         )
 
         # Find existing stop order for this symbol
@@ -489,7 +505,7 @@ class PositionMonitor:
 
             if price_diff_pct >= 0.1:
                 self._replace_stop_order(
-                    symbol, qty, old_order_id, old_stop_price, new_stop_price, profit_pct
+                    symbol, qty, old_order_id, old_stop_price, new_stop_price, profit_pct, is_long
                 )
         else:
             # No stop order found - check if we've already tried and failed for this symbol
@@ -497,17 +513,19 @@ class PositionMonitor:
                 self.logger.warning(
                     f"No stop order found for {symbol}, creating protective stop"
                 )
-                self._create_missing_stop_order(symbol, qty, new_stop_price)
+                self._create_missing_stop_order(symbol, qty, new_stop_price, is_long)
 
     def _calculate_dynamic_stop_price(
         self,
         entry_price: float,
         current_price: float,
         profit_pct: float,
-        strategy_stop_loss_pct: float
+        strategy_stop_loss_pct: float,
+        is_long: bool = True
     ) -> float:
         """
         Calculate dynamic stop price based on profit level (Option B logic)
+        Works for both long and short positions
 
         Logic:
         - Losing/flat (< 0.5% profit): Strategy's original stop distance
@@ -517,15 +535,20 @@ class PositionMonitor:
         Args:
             entry_price: Original entry price
             current_price: Current market price
-            profit_pct: Current profit percentage
+            profit_pct: Current profit percentage (already calculated correctly for long/short)
             strategy_stop_loss_pct: Strategy-specific stop-loss percentage
+            is_long: True for long positions, False for short positions
 
         Returns:
             New stop price
         """
         if profit_pct < 0.5:
             # Losing or minimal profit: use strategy's original stop distance
-            stop_price = current_price * (1 - strategy_stop_loss_pct / 100)
+            if is_long:
+                stop_price = current_price * (1 - strategy_stop_loss_pct / 100)
+            else:
+                # For shorts, stop is above current price
+                stop_price = current_price * (1 + strategy_stop_loss_pct / 100)
 
         elif profit_pct < 1.5:
             # Small profit: move to breakeven
@@ -533,15 +556,21 @@ class PositionMonitor:
 
         else:
             # Good profit: trail at 50% of current profit
-            # If entry=$100, current=$105 (5% profit), stop at $102.50 (lock in 2.5%)
-            profit_per_share = current_price - entry_price
-            stop_price = entry_price + (profit_per_share * 0.5)
+            if is_long:
+                # Long: If entry=$100, current=$105 (5% profit), stop at $102.50 (lock in 2.5%)
+                profit_per_share = current_price - entry_price
+                stop_price = entry_price + (profit_per_share * 0.5)
+            else:
+                # Short: If entry=$100, current=$95 (5% profit), stop at $97.50 (lock in 2.5%)
+                profit_per_share = entry_price - current_price
+                stop_price = entry_price - (profit_per_share * 0.5)
 
         return stop_price
 
     def _find_stop_order(self, symbol: str) -> Optional[Dict]:
         """
         Find existing stop order for a symbol
+        Works for both long (sell stop) and short (buy stop) positions
 
         Returns:
             Order dict if found, None otherwise
@@ -550,11 +579,10 @@ class PositionMonitor:
             # Get all open orders (includes pending_new, accepted, etc.)
             open_orders = self.broker.list_orders(status='open')
 
-            # Also get orders that are pending but might not show as 'open' yet
-            # Note: Alpaca's 'open' status includes: pending_new, accepted, pending_replace
-
             # Find stop order for this symbol
             # Check for both 'stop' and 'stop_limit' order types
+            # For longs: stop side is 'sell'
+            # For shorts: stop side is 'buy'
             for order in open_orders:
                 order_symbol = order.get('symbol')
                 order_type = order.get('type')
@@ -567,8 +595,9 @@ class PositionMonitor:
                         f"status={order_status}, id={order.get('id', 'N/A')}"
                     )
 
-                    # Match stop orders (both 'stop' and 'stop_limit') on the sell side
-                    if order_type in ['stop', 'stop_limit'] and order_side == 'sell':
+                    # Match stop orders (both 'stop' and 'stop_limit')
+                    # Accept both buy and sell stops (for long and short positions)
+                    if order_type in ['stop', 'stop_limit']:
                         self.logger.debug(f"Matched stop order for {symbol}: {order.get('id')}")
                         return order
 
@@ -587,9 +616,10 @@ class PositionMonitor:
         old_order_id: str,
         old_stop_price: float,
         new_stop_price: float,
-        profit_pct: float
+        profit_pct: float,
+        is_long: bool = True
     ):
-        """Replace existing stop order with new stop price"""
+        """Replace existing stop order with new stop price (works for both long and short)"""
         try:
             # Determine stop movement direction
             if new_stop_price > old_stop_price:
@@ -599,18 +629,28 @@ class PositionMonitor:
                 direction = "DOWN"
                 emoji = "📉"
 
+            position_type = "LONG" if is_long else "SHORT"
             self.logger.info(
-                f"{emoji} Trailing stop for {symbol} {direction}: "
+                f"{emoji} Trailing stop for {symbol} ({position_type}) {direction}: "
                 f"${old_stop_price:.2f} -> ${new_stop_price:.2f} "
                 f"(P&L: {profit_pct:+.2f}%)"
             )
 
-            # Use broker's replace method
-            new_order = self.broker.replace_stop_loss_order(
-                old_order_id=old_order_id,
+            # Cancel old order and place new one
+            # For longs: stop side is 'sell'
+            # For shorts: stop side is 'buy'
+            stop_side = 'sell' if is_long else 'buy'
+
+            # Cancel old order
+            cancel_success = self.broker.cancel_order(old_order_id)
+
+            # Place new stop order
+            new_order = self.broker.place_order(
                 symbol=symbol,
                 qty=qty,
-                new_stop_price=new_stop_price,
+                side=stop_side,
+                order_type='stop',
+                stop_price=new_stop_price,
                 time_in_force='gtc'
             )
 
@@ -626,16 +666,23 @@ class PositionMonitor:
                 exc_info=True
             )
 
-    def _create_missing_stop_order(self, symbol: str, qty: int, stop_price: float):
-        """Create stop order if one is missing (safety net)"""
+    def _create_missing_stop_order(self, symbol: str, qty: int, stop_price: float, is_long: bool = True):
+        """Create stop order if one is missing (safety net) - works for both long and short"""
         try:
+            position_type = "LONG" if is_long else "SHORT"
             self.logger.warning(
-                f"Creating missing stop order for {symbol} @ ${stop_price:.2f}"
+                f"Creating missing stop order for {symbol} ({position_type}) @ ${stop_price:.2f}"
             )
 
-            stop_order = self.broker.place_stop_loss_order(
+            # For longs: stop side is 'sell'
+            # For shorts: stop side is 'buy'
+            stop_side = 'sell' if is_long else 'buy'
+
+            stop_order = self.broker.place_order(
                 symbol=symbol,
                 qty=qty,
+                side=stop_side,
+                order_type='stop',
                 stop_price=stop_price,
                 time_in_force='gtc'
             )
@@ -667,23 +714,35 @@ class PositionMonitor:
         entry_price: float,
         current_price: float,
         profit_pct: float,
-        target_pct: float
+        target_pct: float,
+        is_long: bool = True
     ):
-        """Execute take-profit via market sell order"""
+        """Execute take-profit via market order (works for both long and short)"""
         try:
-            profit_amount = (current_price - entry_price) * qty
+            # Calculate profit amount
+            # For longs: (current - entry) * qty
+            # For shorts: (entry - current) * qty
+            if is_long:
+                profit_amount = (current_price - entry_price) * qty
+            else:
+                profit_amount = (entry_price - current_price) * qty
 
+            position_type = "LONG" if is_long else "SHORT"
             self.logger.info(
-                f"🎯 TAKE PROFIT: {symbol} at {profit_pct:.2f}% (target: {target_pct:.2f}%)\n"
+                f"🎯 TAKE PROFIT ({position_type}): {symbol} at {profit_pct:.2f}% (target: {target_pct:.2f}%)\n"
                 f"  Entry: ${entry_price:.2f}\n"
                 f"  Exit: ${current_price:.2f}\n"
                 f"  Profit: ${profit_amount:.2f}"
             )
 
-            # Place market sell order
+            # Place market order to close position
+            # For longs: sell to close
+            # For shorts: buy to cover
+            close_side = 'sell' if is_long else 'buy'
+
             order = self.broker.place_order(
                 symbol=symbol,
-                side='sell',
+                side=close_side,
                 qty=qty,
                 order_type='market',
                 time_in_force='day'
