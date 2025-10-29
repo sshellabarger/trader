@@ -250,6 +250,17 @@
 
         .data-table tbody tr:hover {
             background: var(--bg-hover);
+            transform: scale(1.01);
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+            transition: all 0.2s ease;
+        }
+
+        .data-table tbody tr[onclick] {
+            cursor: pointer !important;
+        }
+
+        .data-table tbody tr[onclick]:active {
+            transform: scale(0.99);
         }
 
         .badge {
@@ -689,7 +700,10 @@
             <div class="card">
                 <div class="card-header">
                     <h2 class="card-title">Current Positions</h2>
-                    <button class="btn btn-sm btn-danger" onclick="closeAllPositions()">Close All</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-sm btn-info" onclick="testPositionModal()" title="Test modal functionality">🧪 Test Modal</button>
+                        <button class="btn btn-sm btn-danger" onclick="closeAllPositions()">Close All</button>
+                    </div>
                 </div>
                 <div id="positionsTable"></div>
             </div>
@@ -881,9 +895,11 @@
                 }
 
                 console.log('Loaded positions:', positions.length); // DEBUG
+                console.log('Position data sample:', positions.length > 0 ? positions[0] : 'No positions');
 
                 // Store positions for modal access
                 positionsData = positions;
+                console.log('positionsData array updated with', positionsData.length, 'positions');
 
                 document.getElementById('positionCount').textContent = positions.length;
 
@@ -916,8 +932,8 @@
                     const strategy = pos.primary_strategy || 'unknown';
 
                     return `
-                        <tr onclick="openPositionModal('${pos.symbol}')" style="cursor: pointer;">
-                            <td><strong>${pos.symbol}</strong></td>
+                        <tr onclick="openPositionModal('${pos.symbol}')" style="cursor: pointer;" title="Click to view details">
+                            <td><strong>${pos.symbol}</strong> 👁️</td>
                             <td>${pos.qty}</td>
                             <td>${formatCurrency(pos.avg_entry_price)}</td>
                             <td>${formatCurrency(pos.current_price)}</td>
@@ -1801,33 +1817,49 @@
         }
 
         function openPositionModal(symbol) {
-            console.log(`Opening position modal for ${symbol}`);
-            console.log('Available positions:', positionsData.length);
+            try {
+                console.log(`=== Opening position modal for ${symbol} ===`);
+                console.log('Available positions:', positionsData.length);
+                console.log('positionsData:', positionsData);
 
-            const position = positionsData.find(p => p.symbol === symbol);
-            if (!position) {
-                console.error(`Position not found for symbol: ${symbol}`);
-                console.error('Available symbols:', positionsData.map(p => p.symbol));
-                alert(`Error: Could not find position data for ${symbol}`);
-                return;
-            }
+                const position = positionsData.find(p => p.symbol === symbol);
+                if (!position) {
+                    console.error(`Position not found for symbol: ${symbol}`);
+                    console.error('Available symbols:', positionsData.map(p => p.symbol));
+                    alert(`Error: Could not find position data for ${symbol}`);
+                    return;
+                }
 
-            console.log('Position data:', position);
+                console.log('Position data:', JSON.stringify(position, null, 2));
 
-            // Set modal title
-            document.getElementById('positionModalTitle').textContent = `${symbol} - Position Details`;
+                // Check if modal elements exist
+                const modalElement = document.getElementById('positionModal');
+                const modalTitle = document.getElementById('positionModalTitle');
+                const modalBody = document.getElementById('positionModalBody');
 
-            // Calculate additional metrics
-            const entryPrice = position.entry_price || position.avg_entry_price || 0;
-            const currentPrice = position.current_price || 0;
-            const qty = position.qty || 0;
-            const marketValue = position.market_value || 0;
-            const unrealizedPL = position.unrealized_pl || 0;
-            const unrealizedPLPct = position.unrealized_plpc || 0;
-            const side = position.side || 'long';
-            const strategy = position.primary_strategy || 'unknown';
-            const stopLossPct = position.stop_loss_pct || 0;
-            const takeProfitPct = position.take_profit_pct || 0;
+                if (!modalElement || !modalTitle || !modalBody) {
+                    console.error('Modal elements not found!', { modalElement, modalTitle, modalBody });
+                    alert('Error: Modal elements not found in page');
+                    return;
+                }
+
+                // Set modal title
+                modalTitle.textContent = `${symbol} - Position Details`;
+                console.log('Modal title set');
+
+                // Calculate additional metrics
+                const entryPrice = position.entry_price || position.avg_entry_price || 0;
+                const currentPrice = position.current_price || 0;
+                const qty = position.qty || 0;
+                const marketValue = position.market_value || 0;
+                const unrealizedPL = position.unrealized_pl || 0;
+                const unrealizedPLPct = position.unrealized_plpc || 0;
+                const side = position.side || 'long';
+                const strategy = position.primary_strategy || 'unknown';
+                const stopLossPct = position.stop_loss_pct || 0;
+                const takeProfitPct = position.take_profit_pct || 0;
+
+                console.log('Calculated metrics:', { entryPrice, currentPrice, qty, marketValue, unrealizedPL, strategy });
 
             // Calculate stop loss and take profit prices if available
             let stopLossPrice = null;
@@ -1931,11 +1963,57 @@
                 </div>
             `;
 
-            document.getElementById('positionModalBody').innerHTML = modalHTML;
-            document.getElementById('positionModal').classList.add('active');
+                console.log('Setting modal body HTML...');
+                modalBody.innerHTML = modalHTML;
+                console.log('Modal body HTML set');
 
-            // Prevent body scroll when modal is open
-            document.body.style.overflow = 'hidden';
+                console.log('Adding active class to modal...');
+                modalElement.classList.add('active');
+                console.log('Modal classes after add:', modalElement.className);
+
+                // Prevent body scroll when modal is open
+                document.body.style.overflow = 'hidden';
+
+                console.log('=== Modal opened successfully ===');
+
+            } catch (error) {
+                console.error('ERROR in openPositionModal:', error);
+                console.error('Stack trace:', error.stack);
+                alert(`Error opening position modal: ${error.message}`);
+            }
+        }
+
+        function testPositionModal() {
+            console.log('=== Testing Position Modal ===');
+
+            // Create test position data
+            const testPosition = {
+                symbol: 'TEST',
+                qty: 100,
+                avg_entry_price: 50.00,
+                current_price: 55.50,
+                market_value: 5550.00,
+                unrealized_pl: 550.00,
+                unrealized_plpc: 11.00,
+                side: 'long',
+                primary_strategy: 'test_strategy',
+                entry_price: 50.00,
+                stop_loss_pct: 2.0,
+                take_profit_pct: 5.0
+            };
+
+            // Temporarily add to positionsData
+            const originalData = [...positionsData];
+            positionsData = [testPosition];
+
+            console.log('Opening test modal...');
+            openPositionModal('TEST');
+
+            // Restore original data after a delay
+            setTimeout(() => {
+                positionsData = originalData;
+                console.log('Restored original positionsData');
+            }, 100);
         }
 
         function closePositionModal(event) {
