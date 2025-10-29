@@ -124,7 +124,7 @@ async def api_health():
 async def api_positions():
     """
     Get current positions
-    Returns list of open positions with P/L
+    Returns list of open positions with P/L and strategy metadata
     """
     try:
         # Try to get from broker directly if available
@@ -133,6 +133,16 @@ async def api_positions():
                 positions = _broker_instance.list_positions() if hasattr(_broker_instance, 'list_positions') else _broker_instance.get_positions()
                 if positions:
                     logger.debug(f"Got {len(positions)} positions from broker")
+                    # Enrich with strategy metadata if available
+                    if _position_monitor_instance and hasattr(_position_monitor_instance, 'position_metadata'):
+                        for pos in positions:
+                            symbol = pos.get('symbol')
+                            if symbol and symbol in _position_monitor_instance.position_metadata:
+                                metadata = _position_monitor_instance.position_metadata[symbol]
+                                pos['primary_strategy'] = metadata.get('primary_strategy', 'unknown')
+                                pos['entry_price'] = metadata.get('entry_price')
+                                pos['stop_loss_pct'] = metadata.get('stop_loss_pct')
+                                pos['take_profit_pct'] = metadata.get('take_profit_pct')
                     return {"positions": positions if isinstance(positions, list) else []}
             except Exception as e:
                 logger.warning(f"Couldn't get positions from broker: {e}")
@@ -268,11 +278,17 @@ async def api_events(limit: int = 100):
 
 # Global broker instance (will be set by CLI)
 _broker_instance = None
+_position_monitor_instance = None
 
 def set_broker_instance(broker):
     """Set the global broker instance for API endpoints to use"""
     global _broker_instance
     _broker_instance = broker
+
+def set_position_monitor_instance(position_monitor):
+    """Set the global position monitor instance for API endpoints to use"""
+    global _position_monitor_instance
+    _position_monitor_instance = position_monitor
 
 
 # Trading action endpoints

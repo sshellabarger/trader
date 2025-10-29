@@ -49,7 +49,7 @@ from trading_bot.engine import Trader
 from trading_bot.broker_alpaca import AlpacaBroker
 from trading_bot.state import StateStore
 from trading_bot.settings import Settings
-from trading_bot.webapp import app, set_broker_instance
+from trading_bot.webapp import app, set_broker_instance, set_position_monitor_instance
 import uvicorn
 
 
@@ -79,9 +79,13 @@ def run():
         trader = Trader(broker, state, settings, logger)
         logger.info("✓ Trader engine initialized")
 
-        # Pass broker to webapp for API endpoints
+        # Pass broker and position monitor to webapp for API endpoints
         set_broker_instance(broker)
         logger.info("✓ Broker instance linked to webapp")
+
+        if hasattr(trader, 'position_monitor'):
+            set_position_monitor_instance(trader.position_monitor)
+            logger.info("✓ Position monitor instance linked to webapp")
 
     except Exception as e:
         logger.error(f"Failed to initialize: {e}", exc_info=True)

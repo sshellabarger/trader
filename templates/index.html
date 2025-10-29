@@ -264,6 +264,17 @@
         .badge-warning { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
         .badge-info { background: rgba(6, 182, 212, 0.1); color: var(--info); }
 
+        .strategy-badge {
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
         .positive { color: var(--success); }
         .negative { color: var(--danger); }
 
@@ -738,10 +749,24 @@
         </div>
     </div>
 
+    <!-- Position Detail Modal -->
+    <div class="modal-overlay" id="positionModal" onclick="closePositionModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2 id="positionModalTitle">Position Details</h2>
+                <button class="modal-close" onclick="closePositionModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="positionModalBody">
+                <!-- Content will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
     <script>
         let refreshInterval;
         let countdown = 20;
         let candidatesData = []; // Store candidates for modal access
+        let positionsData = []; // Store positions for modal access
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -857,6 +882,9 @@
 
                 console.log('Loaded positions:', positions.length); // DEBUG
 
+                // Store positions for modal access
+                positionsData = positions;
+
                 document.getElementById('positionCount').textContent = positions.length;
 
                 if (positions.length === 0) {
@@ -885,9 +913,10 @@
                     totalValue += parseFloat(pos.market_value || 0);
                     totalPL += parseFloat(pos.unrealized_pl || 0);
                     const plClass = pos.unrealized_pl >= 0 ? 'positive' : 'negative';
+                    const strategy = pos.primary_strategy || 'unknown';
 
                     return `
-                        <tr>
+                        <tr onclick="openPositionModal('${pos.symbol}')" style="cursor: pointer;">
                             <td><strong>${pos.symbol}</strong></td>
                             <td>${pos.qty}</td>
                             <td>${formatCurrency(pos.avg_entry_price)}</td>
@@ -895,6 +924,7 @@
                             <td>${formatCurrency(pos.market_value)}</td>
                             <td class="${plClass}">${formatCurrency(pos.unrealized_pl)}</td>
                             <td class="${plClass}">${(parseFloat(pos.unrealized_plpc) || 0).toFixed(2)}%</td>
+                            <td><span class="strategy-badge">${strategy}</span></td>
                         </tr>
                     `;
                 }).join('');
@@ -911,6 +941,7 @@
                                 <th>Value</th>
                                 <th>P/L</th>
                                 <th>P/L %</th>
+                                <th>Strategy</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1769,10 +1800,152 @@
             document.body.style.overflow = 'auto';
         }
 
+        function openPositionModal(symbol) {
+            const position = positionsData.find(p => p.symbol === symbol);
+            if (!position) {
+                console.error('Position not found:', symbol);
+                return;
+            }
+
+            // Set modal title
+            document.getElementById('positionModalTitle').textContent = `${symbol} - Position Details`;
+
+            // Calculate additional metrics
+            const entryPrice = position.entry_price || position.avg_entry_price || 0;
+            const currentPrice = position.current_price || 0;
+            const qty = position.qty || 0;
+            const marketValue = position.market_value || 0;
+            const unrealizedPL = position.unrealized_pl || 0;
+            const unrealizedPLPct = position.unrealized_plpc || 0;
+            const side = position.side || 'long';
+            const strategy = position.primary_strategy || 'unknown';
+            const stopLossPct = position.stop_loss_pct || 0;
+            const takeProfitPct = position.take_profit_pct || 0;
+
+            // Calculate stop loss and take profit prices if available
+            let stopLossPrice = null;
+            let takeProfitPrice = null;
+            if (stopLossPct && entryPrice) {
+                stopLossPrice = entryPrice * (1 - stopLossPct / 100);
+            }
+            if (takeProfitPct && entryPrice) {
+                takeProfitPrice = entryPrice * (1 + takeProfitPct / 100);
+            }
+
+            const plClass = unrealizedPL >= 0 ? 'var(--success)' : 'var(--danger)';
+
+            let modalHTML = `
+                <!-- Position Overview Section -->
+                <div class="detail-section">
+                    <h3>📊 Position Overview</h3>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <div class="detail-label">Symbol</div>
+                            <div class="detail-value"><strong>${symbol}</strong></div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Side</div>
+                            <div class="detail-value">
+                                <span class="badge ${side === 'long' ? 'badge-success' : 'badge-danger'}">${side.toUpperCase()}</span>
+                            </div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Quantity</div>
+                            <div class="detail-value">${qty}</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Primary Strategy</div>
+                            <div class="detail-value">
+                                <span class="strategy-badge">${strategy}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Price Information Section -->
+                <div class="detail-section">
+                    <h3>💰 Price Information</h3>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <div class="detail-label">Entry Price</div>
+                            <div class="detail-value">${formatCurrency(entryPrice)}</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Current Price</div>
+                            <div class="detail-value">${formatCurrency(currentPrice)}</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Market Value</div>
+                            <div class="detail-value">${formatCurrency(marketValue)}</div>
+                        </div>
+                        ${stopLossPrice ? `
+                            <div class="detail-item">
+                                <div class="detail-label">Stop Loss Price</div>
+                                <div class="detail-value" style="color: var(--danger);">${formatCurrency(stopLossPrice)} (-${stopLossPct.toFixed(2)}%)</div>
+                            </div>
+                        ` : ''}
+                        ${takeProfitPrice ? `
+                            <div class="detail-item">
+                                <div class="detail-label">Take Profit Price</div>
+                                <div class="detail-value" style="color: var(--success);">${formatCurrency(takeProfitPrice)} (+${takeProfitPct.toFixed(2)}%)</div>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+
+                <!-- Performance Section -->
+                <div class="detail-section">
+                    <h3>📈 Performance</h3>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <div class="detail-label">Unrealized P/L</div>
+                            <div class="detail-value" style="color: ${plClass}; font-size: 24px; font-weight: 600;">
+                                ${formatCurrency(unrealizedPL)}
+                            </div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Unrealized P/L %</div>
+                            <div class="detail-value" style="color: ${plClass}; font-size: 24px; font-weight: 600;">
+                                ${unrealizedPLPct.toFixed(2)}%
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <div class="score-bar" style="height: 8px; background: var(--bg-dark);">
+                            <div class="score-fill" style="width: ${Math.min(Math.abs(unrealizedPLPct) * 10, 100)}%; background: ${unrealizedPL >= 0 ? 'var(--success)' : 'var(--danger)'};"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Raw Position Data Section -->
+                <div class="detail-section">
+                    <h3>📋 Complete Position Data</h3>
+                    <pre style="margin-top: 8px; padding: 12px; background: var(--bg-dark); border-radius: 8px; overflow-x: auto; font-size: 12px; line-height: 1.6;">${JSON.stringify(position, null, 2)}</pre>
+                </div>
+            `;
+
+            document.getElementById('positionModalBody').innerHTML = modalHTML;
+            document.getElementById('positionModal').classList.add('active');
+
+            // Prevent body scroll when modal is open
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closePositionModal(event) {
+            // If event is provided and it's not clicking the overlay, don't close
+            if (event && event.target.id !== 'positionModal') {
+                return;
+            }
+
+            document.getElementById('positionModal').classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+
         // Close modal on Escape key
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 closeModal();
+                closePositionModal();
             }
         });
 
