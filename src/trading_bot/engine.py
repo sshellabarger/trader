@@ -1064,6 +1064,25 @@ class Trader:
                         # Check exits first (risk management priority)
                         self.check_exits()
 
+                        # Check if we should close all positions before market close
+                        if self.market_open and self.market_close_time and self.risk_manager:
+                            if self.risk_manager.should_close_eod(self.market_close_time):
+                                self.logger.warning("⏰ Market closing soon - closing all positions")
+                                try:
+                                    positions = self.broker.list_positions() if hasattr(self.broker, 'list_positions') else []
+                                    if positions:
+                                        for position in positions:
+                                            symbol = position.get('symbol')
+                                            qty = int(position.get('qty', 0))
+                                            current_price = float(position.get('current_price', 0))
+                                            self._close_position(symbol, qty, current_price, "end_of_day")
+                                        self.logger.info(f"✓ Closed {len(positions)} positions for end of day")
+                                except Exception as e:
+                                    self.logger.error(f"Error closing positions at EOD: {e}", exc_info=True)
+                                # Skip checking for new entries when closing for EOD
+                                time.sleep(30)
+                                continue
+
                         # Refresh data
                         self.refresh_candidates()
                         self.refresh_news()

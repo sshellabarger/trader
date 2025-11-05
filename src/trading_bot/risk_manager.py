@@ -489,12 +489,12 @@ class RiskManager:
         """Check if we should close all positions at end of day"""
         if not self.close_all_eod:
             return False
-        
+
         now = datetime.now()
         minutes_to_close = (market_close_time - now).total_seconds() / 60
-        
-        # Close all positions 15 minutes before market close
-        return minutes_to_close <= 15
+
+        # Close all positions 5 minutes before market close
+        return minutes_to_close <= 5
     
     def increment_trade_count(self):
         """Increment daily trade counter"""
