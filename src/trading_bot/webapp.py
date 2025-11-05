@@ -14,7 +14,7 @@ import logging
 
 from .state import (
     get_kv, set_kv, get_positions as state_get_positions,
-    get_health, get_recent_events, get_candidates
+    get_health, get_recent_events, get_candidates, get_todays_realized_pnl
 )
 from .settings import get_settings, update_settings
 
@@ -201,6 +201,52 @@ async def api_positions():
     except Exception as e:
         logger.error(f"Error getting positions: {e}", exc_info=True)
         return {"positions": [], "error": str(e)}
+
+
+@app.get("/api/pnl")
+async def api_pnl():
+    """
+    Get comprehensive P/L data including both realized and unrealized
+    Returns:
+    - realized_pnl: P/L from positions closed today
+    - unrealized_pnl: P/L from current open positions
+    - total_pnl: Combined daily P/L
+    """
+    try:
+        # Get realized P/L from closed positions today
+        realized_data = get_todays_realized_pnl()
+        realized_pnl = realized_data.get('total', 0)
+
+        # Get unrealized P/L from open positions
+        unrealized_pnl = 0
+        if _broker_instance:
+            try:
+                positions = _broker_instance.list_positions() if hasattr(_broker_instance, 'list_positions') else _broker_instance.get_positions()
+                if positions:
+                    for pos in positions:
+                        unrealized_pnl += float(pos.get('unrealized_pl', 0))
+            except Exception as e:
+                logger.warning(f"Couldn't get positions for P/L: {e}")
+
+        # Calculate total
+        total_pnl = realized_pnl + unrealized_pnl
+
+        return {
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "total_pnl": total_pnl,
+            "realized_by_symbol": realized_data.get('by_symbol', {}),
+            "market_day_start": realized_data.get('market_day_start')
+        }
+
+    except Exception as e:
+        logger.error(f"Error calculating P/L: {e}", exc_info=True)
+        return {
+            "realized_pnl": 0,
+            "unrealized_pnl": 0,
+            "total_pnl": 0,
+            "error": str(e)
+        }
 
 
 @app.get("/api/candidates")

@@ -684,6 +684,16 @@
                 <div class="stat-label">Daily P/L</div>
                 <div class="stat-value" id="dailyPL">$0.00</div>
                 <div class="stat-change" id="dailyPLPct">0.00%</div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">
+                    <span id="realizedPL">R: $0</span> | <span id="unrealizedPL">U: $0</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Market Indices</div>
+                <div style="font-size: 13px; line-height: 1.5;">
+                    <div><strong>SPY:</strong> <span id="spy-price">--</span> <span id="spy-change">--</span></div>
+                    <div><strong>QQQ:</strong> <span id="qqq-price">--</span> <span id="qqq-change">--</span></div>
+                </div>
             </div>
         </div>
 
@@ -804,15 +814,98 @@
 
             await Promise.all([
                 loadAccount(),
+                loadPnL(),
                 loadPositions(),
                 loadCandidates(),
                 loadSettings(),
                 loadHealth(),
-                loadEvents()
+                loadEvents(),
+                loadMarketIndices()
             ]);
 
             document.getElementById('refreshBtn').textContent = '🔄 Refresh Now';
             countdown = 20;
+        }
+
+        async function loadPnL() {
+            try {
+                const data = await fetch('/api/pnl').then(r => r.json());
+                console.log('P/L API response:', data);
+
+                const totalPL = parseFloat(data.total_pnl || 0);
+                const realizedPL = parseFloat(data.realized_pnl || 0);
+                const unrealizedPL = parseFloat(data.unrealized_pnl || 0);
+
+                // Update display
+                document.getElementById('dailyPL').textContent = formatCurrency(totalPL);
+                document.getElementById('realizedPL').textContent = `R: ${formatCurrency(realizedPL)}`;
+                document.getElementById('unrealizedPL').textContent = `U: ${formatCurrency(unrealizedPL)}`;
+
+                // Add color class for P/L
+                const plElement = document.getElementById('dailyPL');
+                plElement.className = 'stat-value ' + (totalPL >= 0 ? 'positive' : 'negative');
+
+                // Calculate percentage
+                const healthData = await fetch('/api/health').then(r => r.json()).catch(() => null);
+                if (healthData) {
+                    let systemData = healthData.system || healthData;
+                    if (typeof systemData === 'string') {
+                        try {
+                            systemData = JSON.parse(systemData);
+                        } catch (e) {}
+                    }
+                    if (systemData.status && typeof systemData.status === 'string') {
+                        try {
+                            systemData = JSON.parse(systemData.status);
+                        } catch (e) {}
+                    }
+
+                    let accountData = systemData.account || {};
+                    const equity = parseFloat(accountData.equity || 0);
+                    const dailyPLPct = equity > 0 ? (totalPL / equity * 100).toFixed(2) : 0;
+                    document.getElementById('dailyPLPct').textContent = `${dailyPLPct}%`;
+                }
+
+                console.log('P/L loaded successfully');
+            } catch (error) {
+                console.error('Load P/L error:', error);
+            }
+        }
+
+        async function loadMarketIndices() {
+            try {
+                // Fetch SPY and QQQ data from positions API
+                // This is a simple approach - in production you'd want a dedicated API
+                const data = await fetch('/api/positions').then(r => r.json());
+                let positions = data.positions || [];
+
+                // Try to find SPY and QQQ in positions
+                const spy = positions.find(p => p.symbol === 'SPY');
+                const qqq = positions.find(p => p.symbol === 'QQQ');
+
+                if (spy) {
+                    document.getElementById('spy-price').textContent = formatCurrency(spy.current_price);
+                    const changeClass = spy.unrealized_plpc >= 0 ? 'positive' : 'negative';
+                    document.getElementById('spy-change').innerHTML = `<span class="${changeClass}">${(parseFloat(spy.unrealized_plpc) || 0).toFixed(2)}%</span>`;
+                } else {
+                    // If not in positions, we could fetch from broker API
+                    document.getElementById('spy-price').textContent = '--';
+                    document.getElementById('spy-change').textContent = '--';
+                }
+
+                if (qqq) {
+                    document.getElementById('qqq-price').textContent = formatCurrency(qqq.current_price);
+                    const changeClass = qqq.unrealized_plpc >= 0 ? 'positive' : 'negative';
+                    document.getElementById('qqq-change').innerHTML = `<span class="${changeClass}">${(parseFloat(qqq.unrealized_plpc) || 0).toFixed(2)}%</span>`;
+                } else {
+                    document.getElementById('qqq-price').textContent = '--';
+                    document.getElementById('qqq-change').textContent = '--';
+                }
+
+                console.log('Market indices loaded');
+            } catch (error) {
+                console.error('Load market indices error:', error);
+            }
         }
 
         async function loadAccount() {
@@ -916,18 +1009,14 @@
                         </div>
                     `;
                     document.getElementById('exposurePct').textContent = '0% exposure';
-                    document.getElementById('dailyPL').textContent = '$0.00';
-                    document.getElementById('dailyPLPct').textContent = '0.00%';
                     return;
                 }
 
                 // WE HAVE POSITIONS - RENDER THEM
                 let totalValue = 0;
-                let totalPL = 0;
 
                 const rows = positions.map(pos => {
                     totalValue += parseFloat(pos.market_value || 0);
-                    totalPL += parseFloat(pos.unrealized_pl || 0);
                     const plClass = pos.unrealized_pl >= 0 ? 'positive' : 'negative';
                     const strategy = pos.primary_strategy || 'unknown';
 
@@ -966,7 +1055,7 @@
                     </table>
                 `;
 
-                // Update summary stats
+                // Update exposure percentage
                 const healthData = await fetch('/api/health').then(r => r.json()).catch(() => null);
                 if (healthData) {
                     // Parse system data
@@ -976,7 +1065,7 @@
                             systemData = JSON.parse(systemData);
                         } catch (e) {}
                     }
-                    
+
                     // If nested, parse again
                     if (systemData.status && typeof systemData.status === 'string') {
                         try {
@@ -988,15 +1077,8 @@
 
                     const equity = parseFloat(accountData.equity || 0);
                     const exposurePct = equity > 0 ? (totalValue / equity * 100).toFixed(1) : 0;
-                    const dailyPLPct = equity > 0 ? (totalPL / equity * 100).toFixed(2) : 0;
 
                     document.getElementById('exposurePct').textContent = `${exposurePct}% exposure`;
-                    document.getElementById('dailyPL').textContent = formatCurrency(totalPL);
-                    document.getElementById('dailyPLPct').textContent = `${dailyPLPct}%`;
-
-                    // Add color class for P/L
-                    const plElement = document.getElementById('dailyPL');
-                    plElement.className = totalPL >= 0 ? 'positive' : 'negative';
                 }
 
                 console.log('✓ Rendered', positions.length, 'positions'); // DEBUG

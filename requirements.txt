@@ -11,4 +11,5 @@ aiofiles>=23.2.1
 pytest>=8.2.0
 httpx
 textblob>=0.17.1
+pytz>=2024.1
 

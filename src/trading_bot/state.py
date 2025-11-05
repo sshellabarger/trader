@@ -328,6 +328,94 @@ class StateStore:
         finally:
             conn.close()
 
+    def get_todays_realized_pnl(self) -> Dict[str, Any]:
+        """
+        Calculate realized P/L from positions closed today.
+        Returns a dict with total P/L and breakdown by symbol.
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            # Get today's date at market open (assume 9:30 AM ET start)
+            from datetime import datetime, timedelta
+            import pytz
+
+            # Get current time in ET timezone
+            et_tz = pytz.timezone('America/New_York')
+            now_et = datetime.now(et_tz)
+
+            # Market day starts at 9:30 AM ET
+            # If before 9:30 AM, use previous trading day
+            if now_et.hour < 9 or (now_et.hour == 9 and now_et.minute < 30):
+                market_day_start = now_et.replace(hour=9, minute=30, second=0, microsecond=0) - timedelta(days=1)
+            else:
+                market_day_start = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+
+            # Convert to ISO format for database query
+            start_time = market_day_start.isoformat()
+
+            # Get all trades since market open today
+            cursor = conn.execute("""
+                SELECT symbol, side, qty, price, timestamp
+                FROM trades
+                WHERE timestamp >= ?
+                ORDER BY symbol, timestamp
+            """, (start_time,))
+
+            trades = cursor.fetchall()
+
+            # Calculate P/L by matching buys and sells
+            positions = {}  # symbol -> {qty, cost_basis}
+            realized_pnl = {}  # symbol -> realized_pnl
+
+            for row in trades:
+                symbol, side, qty, price, timestamp = row
+
+                if symbol not in positions:
+                    positions[symbol] = {'qty': 0, 'cost_basis': 0}
+
+                if side.lower() == 'buy':
+                    # Add to position
+                    positions[symbol]['cost_basis'] += qty * price
+                    positions[symbol]['qty'] += qty
+                elif side.lower() == 'sell':
+                    # Close position (full or partial)
+                    if positions[symbol]['qty'] > 0:
+                        # Calculate average entry price
+                        avg_entry = positions[symbol]['cost_basis'] / positions[symbol]['qty']
+
+                        # Calculate P/L for this sale
+                        pnl = (price - avg_entry) * qty
+
+                        if symbol not in realized_pnl:
+                            realized_pnl[symbol] = 0
+                        realized_pnl[symbol] += pnl
+
+                        # Update position
+                        positions[symbol]['qty'] -= qty
+                        if positions[symbol]['qty'] > 0:
+                            positions[symbol]['cost_basis'] = positions[symbol]['cost_basis'] * (positions[symbol]['qty'] / (positions[symbol]['qty'] + qty))
+                        else:
+                            positions[symbol]['cost_basis'] = 0
+
+            # Calculate total
+            total_realized_pnl = sum(realized_pnl.values())
+
+            return {
+                'total': total_realized_pnl,
+                'by_symbol': realized_pnl,
+                'market_day_start': start_time
+            }
+
+        except Exception as e:
+            # If any error (e.g., missing pytz), return zero
+            return {
+                'total': 0,
+                'by_symbol': {},
+                'error': str(e)
+            }
+        finally:
+            conn.close()
+
 
 # Backward compatibility functions (if your existing code uses these)
 _default_store = None
@@ -420,6 +508,11 @@ def get_recent_trades(limit: int = 50) -> List[Dict]:
 def get_trades_by_symbol(symbol: str) -> List[Dict]:
     """Backward compatible function"""
     return _get_store().get_trades_by_symbol(symbol)
+
+
+def get_todays_realized_pnl() -> Dict[str, Any]:
+    """Backward compatible function"""
+    return _get_store().get_todays_realized_pnl()
 
 
 def list_events(limit: int = 50) -> List[Dict]:
