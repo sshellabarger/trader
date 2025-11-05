@@ -641,10 +641,17 @@ class PositionMonitor:
             # For shorts: stop side is 'buy'
             stop_side = 'sell' if is_long else 'buy'
 
-            # Cancel old order
+            # Cancel old order (with retry logic)
             cancel_success = self.broker.cancel_order(old_order_id)
 
-            # Place new stop order
+            if not cancel_success:
+                self.logger.warning(
+                    f"Failed to cancel old stop order {old_order_id} for {symbol}. "
+                    f"Skipping new order placement to avoid duplicate orders."
+                )
+                return
+
+            # Place new stop order only if cancellation succeeded
             new_order = self.broker.place_order(
                 symbol=symbol,
                 qty=qty,
@@ -656,8 +663,8 @@ class PositionMonitor:
 
             if not new_order:
                 self.logger.error(
-                    f"Failed to replace stop order for {symbol}, "
-                    f"position may be unprotected!"
+                    f"Failed to place new stop order for {symbol}, "
+                    f"position may be unprotected! (old order was cancelled)"
                 )
 
         except Exception as e:
@@ -735,7 +742,23 @@ class PositionMonitor:
                 f"  Profit: ${profit_amount:.2f}"
             )
 
-            # Place market order to close position
+            # CRITICAL: Cancel any existing stop order FIRST before placing market order
+            # This ensures shares are not held by the stop order when we try to sell
+            existing_stop = self._find_stop_order(symbol)
+            if existing_stop:
+                stop_id = existing_stop.get('id', '')
+                self.logger.info(f"Cancelling existing stop order {stop_id} for {symbol}")
+                cancel_success = self.broker.cancel_order(stop_id)
+
+                if not cancel_success:
+                    self.logger.warning(
+                        f"Failed to cancel stop order {stop_id} before take-profit. "
+                        f"Will attempt market order anyway."
+                    )
+                else:
+                    self.logger.debug(f"Successfully cancelled stop order {stop_id}")
+
+            # Now place market order to close position
             # For longs: sell to close
             # For shorts: buy to cover
             close_side = 'sell' if is_long else 'buy'
@@ -750,11 +773,6 @@ class PositionMonitor:
 
             if order:
                 self.logger.info(f"✓ Take-profit order executed for {symbol}")
-
-                # Cancel any existing stop order (position closed)
-                existing_stop = self._find_stop_order(symbol)
-                if existing_stop:
-                    self.broker.cancel_order(existing_stop.get('id', ''))
 
                 # Unregister position metadata
                 self.unregister_position(symbol)
