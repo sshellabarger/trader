@@ -5,7 +5,7 @@ Handles position sizing, stop losses, exposure limits, and risk controls
 import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 
@@ -490,7 +490,7 @@ class RiskManager:
         if not self.close_all_eod:
             return False
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         minutes_to_close = (market_close_time - now).total_seconds() / 60
 
         # Close all positions 5 minutes before market close
