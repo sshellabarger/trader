@@ -4,6 +4,7 @@ Alpaca Broker Wrapper - Complete Implementation
 import logging
 import os
 import requests
+import time
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -352,58 +353,78 @@ class AlpacaBroker:
         """Alias for place_order"""
         return self.place_order(**kwargs)
 
-    def cancel_order(self, order_id: str) -> bool:
+    def cancel_order(self, order_id: str, max_retries: int = 3) -> bool:
         """
-        Cancel an order with enhanced diagnostics
+        Cancel an order with retry logic for orders in 'new' state
 
         Args:
             order_id: The order ID to cancel
+            max_retries: Maximum number of retry attempts (default: 3)
 
         Returns:
             True if canceled successfully, False otherwise
         """
-        # First check order status to understand why cancel might fail
-        order = self.get_order(order_id)
+        retry_delays = [0.5, 1.0, 2.0]  # Exponential backoff delays in seconds
 
-        if order:
-            status = order.get('status', 'unknown')
-            order_type = order.get('type', 'unknown')
-            symbol = order.get('symbol', 'unknown')
+        for attempt in range(max_retries):
+            # Check order status to understand current state
+            order = self.get_order(order_id)
 
-            # Check if order is in a state that can be canceled
-            if status in ['filled', 'partially_filled']:
-                self.logger.info(
-                    f"Cannot cancel order {order_id} - already {status} "
-                    f"({order_type} for {symbol})"
-                )
-                return False
-            elif status in ['canceled', 'expired', 'replaced']:
-                self.logger.debug(
-                    f"Order {order_id} already {status} "
-                    f"({order_type} for {symbol})"
-                )
-                return False
-            elif status not in ['new', 'accepted', 'pending_new', 'pending_cancel']:
-                self.logger.warning(
-                    f"Order {order_id} in unexpected state '{status}' "
-                    f"({order_type} for {symbol})"
-                )
-        else:
-            self.logger.warning(f"Cannot retrieve order {order_id} before cancel attempt")
-
-        # Attempt to cancel
-        url = f"{self.base_url}/v2/orders/{order_id}"
-        result = self._make_request('DELETE', url)
-
-        if result:
-            self.logger.debug(f"Successfully canceled order {order_id}")
-            return True
-        else:
             if order:
-                self.logger.warning(
-                    f"Failed to cancel order {order_id} (status: {order.get('status', 'unknown')})"
-                )
-            return False
+                status = order.get('status', 'unknown')
+                order_type = order.get('type', 'unknown')
+                symbol = order.get('symbol', 'unknown')
+
+                # Check if order is in a state that can be canceled
+                if status in ['filled', 'partially_filled']:
+                    self.logger.info(
+                        f"Cannot cancel order {order_id} - already {status} "
+                        f"({order_type} for {symbol})"
+                    )
+                    return False
+                elif status in ['canceled', 'expired', 'replaced']:
+                    self.logger.debug(
+                        f"Order {order_id} already {status} "
+                        f"({order_type} for {symbol})"
+                    )
+                    return True  # Consider this success since order is already cancelled
+                elif status not in ['new', 'accepted', 'pending_new', 'pending_cancel']:
+                    self.logger.warning(
+                        f"Order {order_id} in unexpected state '{status}' "
+                        f"({order_type} for {symbol})"
+                    )
+            else:
+                self.logger.warning(f"Cannot retrieve order {order_id} before cancel attempt")
+
+            # Attempt to cancel
+            url = f"{self.base_url}/v2/orders/{order_id}"
+            result = self._make_request('DELETE', url)
+
+            if result:
+                self.logger.debug(f"Successfully canceled order {order_id}")
+                return True
+            else:
+                # Cancel failed - check if we should retry
+                if attempt < max_retries - 1:  # Not the last attempt
+                    if order and order.get('status') in ['new', 'pending_new']:
+                        # Order is newly created, may need time to settle
+                        delay = retry_delays[attempt] if attempt < len(retry_delays) else 2.0
+                        self.logger.debug(
+                            f"Order {order_id} cancel failed (status: {order.get('status')}), "
+                            f"retrying in {delay}s (attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(delay)
+                        continue
+
+                # Final attempt or non-retriable status
+                if order:
+                    self.logger.warning(
+                        f"Failed to cancel order {order_id} after {attempt + 1} attempt(s) "
+                        f"(status: {order.get('status', 'unknown')})"
+                    )
+                return False
+
+        return False
 
     def get_order(self, order_id: str) -> Optional[Dict]:
         """Get order details"""
