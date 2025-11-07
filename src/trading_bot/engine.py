@@ -554,7 +554,8 @@ class Trader:
                     should_enter, reason = self.strategy_manager.get_entry_signal(
                         candidate,
                         entry_threshold=entry_threshold,
-                        strategy_config=strategy_config
+                        strategy_config=strategy_config,
+                        position_side=position_side  # Pass position direction for validation
                     )
 
                     if not should_enter:

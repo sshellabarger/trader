@@ -98,7 +98,7 @@ class OrderValidator:
         # Account validation
         if account_info:
             self._validate_account(
-                side, qty, price or 0, account_info, result
+                side, qty, price or 0, account_info, result, current_positions
             )
         
         # Position validation
@@ -268,43 +268,62 @@ class OrderValidator:
         qty: int,
         price: float,
         account_info: Dict,
-        result: ValidationResult
+        result: ValidationResult,
+        current_positions: Optional[List[Dict]] = None
     ):
-        """Validate against account constraints"""
-        if side == 'buy':
+        """
+        Validate against account constraints
+
+        For buy orders: Check buying power for long positions
+        For sell orders: Check if closing existing position OR opening short (which requires margin)
+        """
+        order_value = qty * price
+        commission = self.settings.get('backtest', {}).get('commission_per_trade', 1.0)
+
+        # Check if this sell is closing an existing position
+        is_closing_position = False
+        if side == 'sell' and current_positions:
+            # Look for existing long position being closed
+            for pos in current_positions:
+                if pos.get('symbol') and pos.get('qty'):
+                    # Positive qty means long position
+                    if int(pos.get('qty', 0)) > 0:
+                        is_closing_position = True
+                        break
+
+        # Both buy orders (opening long) and sell orders (opening short) need buying power
+        if side == 'buy' or (side == 'sell' and not is_closing_position):
             buying_power = float(account_info.get('buying_power', 0))
-            order_value = qty * price
-            
-            # Add estimated commission
-            commission = self.settings.get('backtest', {}).get('commission_per_trade', 1.0)
             total_cost = order_value + commission
-            
+
+            order_type = "long entry" if side == 'buy' else "short entry (margin required)"
+
             if total_cost > buying_power:
                 result.add_error(
-                    f"Insufficient buying power: ${buying_power:,.2f} "
+                    f"Insufficient buying power for {order_type}: ${buying_power:,.2f} "
                     f"< ${total_cost:,.2f}"
                 )
             elif total_cost > buying_power * 0.95:
                 result.add_warning(
-                    f"Order uses {(total_cost/buying_power)*100:.1f}% "
+                    f"{order_type.capitalize()} uses {(total_cost/buying_power)*100:.1f}% "
                     "of buying power"
                 )
             else:
                 result.add_check(
-                    f"Sufficient buying power (${buying_power:,.2f})"
+                    f"Sufficient buying power for {order_type} (${buying_power:,.2f})"
                 )
-            
+
             # Check minimum trade value
             min_value = self.settings.get('risk', {}).get('min_trade_value', 100)
             if order_value < min_value:
                 result.add_warning(
                     f"Order value ${order_value:.2f} below minimum ${min_value:.2f}"
                 )
-        
-        elif side == 'sell':
-            # For sell orders, just log account state
+
+        elif side == 'sell' and is_closing_position:
+            # Closing existing position - just log account state
             cash = float(account_info.get('cash', 0))
-            result.add_check(f"Account cash: ${cash:,.2f}")
+            result.add_check(f"Closing position. Account cash: ${cash:,.2f}")
     
     def _validate_positions(
         self,
@@ -316,17 +335,46 @@ class OrderValidator:
         account_info: Optional[Dict],
         result: ValidationResult
     ):
-        """Validate against current positions"""
+        """Validate against current positions (supports both longs and shorts)"""
         # Check if position exists
         existing_pos = next(
             (p for p in current_positions if p.get('symbol') == symbol),
             None
         )
-        
+
+        # Determine if this is opening a new position or closing existing
+        is_opening_position = False
+
         if side == 'buy':
-            if existing_pos:
-                result.add_warning(f"Already have position in {symbol}")
-            
+            # Buy can be: opening long OR covering short
+            if not existing_pos:
+                is_opening_position = True  # Opening new long
+            elif int(existing_pos.get('qty', 0)) < 0:
+                is_opening_position = False  # Covering existing short
+            else:
+                result.add_warning(f"Already have long position in {symbol}")
+                is_opening_position = False
+
+        elif side == 'sell':
+            # Sell can be: opening short OR closing long
+            if not existing_pos:
+                is_opening_position = True  # Opening new short
+            elif int(existing_pos.get('qty', 0)) > 0:
+                # Closing existing long position - validate we have enough shares
+                pos_qty = abs(float(existing_pos.get('qty', 0)))
+                if qty > pos_qty:
+                    result.add_error(
+                        f"Sell quantity {qty} exceeds long position size {pos_qty}"
+                    )
+                else:
+                    result.add_check(f"Sell quantity {qty} <= position {pos_qty}")
+                is_opening_position = False
+            else:
+                result.add_warning(f"Already have short position in {symbol}")
+                is_opening_position = False
+
+        # Apply position limits only when opening new positions
+        if is_opening_position:
             # Check max positions
             max_positions = self.settings.get('risk', {}).get('max_positions', 10)
             if len(current_positions) >= max_positions:
@@ -338,39 +386,40 @@ class OrderValidator:
                 result.add_check(
                     f"Position count {len(current_positions)}/{max_positions} OK"
                 )
-            
+
             # Check position size limits
             if account_info:
                 equity = float(account_info.get('equity', 0))
                 position_value = qty * price
                 position_pct = (position_value / equity * 100) if equity > 0 else 0
-                
+
+                position_type = "long" if side == 'buy' else "short"
                 max_position_pct = self.settings.get('risk', {}).get(
                     'max_position_size_pct', 5.0
                 )
-                
+
                 if position_pct > max_position_pct:
                     result.add_error(
-                        f"Position size {position_pct:.1f}% exceeds "
+                        f"{position_type.capitalize()} position size {position_pct:.1f}% exceeds "
                         f"limit of {max_position_pct:.1f}%"
                     )
                 else:
                     result.add_check(
-                        f"Position size {position_pct:.1f}% within limits"
+                        f"{position_type.capitalize()} position size {position_pct:.1f}% within limits"
                     )
-                
+
                 # Check total exposure
                 current_exposure = sum(
-                    float(p.get('market_value', 0))
+                    abs(float(p.get('market_value', 0)))  # Use abs for both long and short
                     for p in current_positions
                 )
                 new_exposure = current_exposure + position_value
                 exposure_pct = (new_exposure / equity * 100) if equity > 0 else 0
-                
+
                 max_exposure = self.settings.get('risk', {}).get(
                     'max_total_exposure_pct', 80.0
                 )
-                
+
                 if exposure_pct > max_exposure:
                     result.add_error(
                         f"Total exposure {exposure_pct:.1f}% would exceed "
@@ -380,18 +429,6 @@ class OrderValidator:
                     result.add_check(
                         f"Total exposure {exposure_pct:.1f}% within limits"
                     )
-        
-        elif side == 'sell':
-            if not existing_pos:
-                result.add_error(f"No position in {symbol} to sell")
-            else:
-                pos_qty = abs(float(existing_pos.get('qty', 0)))
-                if qty > pos_qty:
-                    result.add_error(
-                        f"Sell quantity {qty} exceeds position size {pos_qty}"
-                    )
-                else:
-                    result.add_check(f"Sell quantity {qty} <= position {pos_qty}")
     
     def _validate_market_conditions(
         self,
