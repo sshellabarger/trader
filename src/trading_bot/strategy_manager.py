@@ -668,19 +668,49 @@ class StrategyManager:
         self,
         signal: CombinedSignal,
         entry_threshold: float = 0.62,
-        strategy_config: Optional[Dict[str, Any]] = None
+        strategy_config: Optional[Dict[str, Any]] = None,
+        position_side: Optional[str] = None
     ) -> Tuple[bool, str]:
         """
         Determine if signal is strong enough for entry.
         Uses strategy-specific configuration if provided.
         Only considers regime-matching strategies in evaluation.
+        Supports both long and short position validation.
+
+        Args:
+            signal: Combined signal with score and metadata
+            entry_threshold: Threshold for long positions (default 0.62)
+            strategy_config: Strategy-specific configuration
+            position_side: 'long' or 'short' to determine validation logic
+
+        Returns:
+            Tuple of (should_enter: bool, reason: str)
         """
         # Use strategy-specific threshold if available
         if strategy_config:
             entry_threshold = strategy_config.get('entry_threshold', entry_threshold)
 
-        if signal.final_score < entry_threshold:
-            return False, f"Score {signal.final_score:.2f} < threshold {entry_threshold}"
+        # Determine position direction from score if not explicitly provided
+        if position_side is None:
+            if signal.final_score >= 0.6:
+                position_side = 'long'
+            elif signal.final_score <= 0.4:
+                position_side = 'short'
+            else:
+                return False, f"Neutral score {signal.final_score:.2f} (0.4-0.6 range)"
+
+        # Validate signal strength based on position direction
+        if position_side == 'long':
+            # For longs: high scores are bullish, check if score is HIGH enough
+            if signal.final_score < entry_threshold:
+                return False, f"Long signal {signal.final_score:.2f} < threshold {entry_threshold}"
+        elif position_side == 'short':
+            # For shorts: low scores are bearish, check if score is LOW enough
+            short_threshold = 1.0 - entry_threshold  # e.g., 1.0 - 0.62 = 0.38
+            if signal.final_score > short_threshold:
+                return False, f"Short signal {signal.final_score:.2f} > threshold {short_threshold:.2f}"
+        else:
+            return False, f"Invalid position_side: {position_side}"
 
         # active_strategies now only includes regime-matching strategies
         if len(signal.active_strategies) < 2:
@@ -692,10 +722,15 @@ class StrategyManager:
 
         if signal.regime == MarketRegime.HIGH_VOLATILITY:
             # Crypto can handle high volatility better
-            if not signal.is_crypto and signal.final_score < entry_threshold + 0.1:
-                return False, "High volatility requires higher score (non-crypto)"
+            if not signal.is_crypto:
+                # For longs, require higher score in high volatility
+                if position_side == 'long' and signal.final_score < entry_threshold + 0.1:
+                    return False, "High volatility requires higher score (non-crypto)"
+                # For shorts, require lower score in high volatility
+                elif position_side == 'short' and signal.final_score > short_threshold - 0.1:
+                    return False, "High volatility requires stronger short signal (non-crypto)"
 
-        return True, f"Strong signal: {signal.final_score:.2f}"
+        return True, f"Strong {position_side} signal: {signal.final_score:.2f}"
 
     def calculate_stop_loss(
         self,
