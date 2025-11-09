@@ -383,17 +383,21 @@ def print_batch_summary(results: List[StrategyTestResult], output_dir: str):
 
         # Print rankings
         logger.info("\nSTRATEGY RANKINGS:")
-        logger.info("\nBy Total P&L:")
-        for i, (strategy, pnl) in enumerate(comparison['rankings']['by_total_pnl'][:5], 1):
-            logger.info(f"  {i}. {strategy}: ${pnl:.2f}")
 
-        logger.info("\nBy Win Rate:")
-        for i, (strategy, wr) in enumerate(comparison['rankings']['by_win_rate'][:5], 1):
-            logger.info(f"  {i}. {strategy}: {wr:.1%}")
+        if 'Total P&L' in comparison['rankings']:
+            logger.info("\nBy Total P&L:")
+            for i, rank in enumerate(comparison['rankings']['Total P&L'][:5], 1):
+                logger.info(f"  {i}. {rank['strategy']}: ${rank['value']:.2f}")
 
-        logger.info("\nBy Sharpe Ratio:")
-        for i, (strategy, sharpe) in enumerate(comparison['rankings']['by_sharpe_ratio'][:5], 1):
-            logger.info(f"  {i}. {strategy}: {sharpe:.2f}")
+        if 'Win Rate' in comparison['rankings']:
+            logger.info("\nBy Win Rate:")
+            for i, rank in enumerate(comparison['rankings']['Win Rate'][:5], 1):
+                logger.info(f"  {i}. {rank['strategy']}: {rank['value']:.1f}%")
+
+        if 'Sharpe Ratio' in comparison['rankings']:
+            logger.info("\nBy Sharpe Ratio:")
+            for i, rank in enumerate(comparison['rankings']['Sharpe Ratio'][:5], 1):
+                logger.info(f"  {i}. {rank['strategy']}: {rank['value']:.2f}")
 
         # Print recommendations
         if 'recommendations' in comparison:
