@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-requests
-pydantic>=2
-Jinja2
-python-dateutil
-pandas

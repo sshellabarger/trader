@@ -1,8 +1,0 @@
-[project]
-name='trading-bot'
-version='0.2.0'
-requires-python='>=3.10'
-dependencies=['fastapi','uvicorn[standard]','requests','pydantic>=2','Jinja2','python-dateutil','pandas']
-[tool.setuptools]
-packages=['trading_bot']
-package-dir={''='src'}
