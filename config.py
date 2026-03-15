@@ -1,12 +1,17 @@
 """
 Configuration — all settings in one place with sensible defaults.
 Override via environment variables or a config dict passed at runtime.
+Auto-loads .env file on import if present.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+# Auto-load .env file before reading any env vars
+from .dotenv import load_dotenv
+_env_loaded = load_dotenv()
 
 
 @dataclass
@@ -22,6 +27,7 @@ class BrokerConfig:
         self.api_key = self.api_key or os.getenv("APCA_API_KEY_ID", "")
         self.api_secret = self.api_secret or os.getenv("APCA_API_SECRET_KEY", "")
         self.base_url = os.getenv("APCA_API_BASE_URL", self.base_url)
+        self.data_feed = os.getenv("APCA_DATA_FEED", self.data_feed)
 
 
 @dataclass
