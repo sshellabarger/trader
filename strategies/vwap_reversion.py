@@ -55,6 +55,15 @@ class VWAPReversionStrategy(BaseStrategy):
         if self.active_count >= self.sc.max_trades_per_strategy:
             return None
 
+        # Block re-entry after stop-out
+        if self.is_blocked(candidate.symbol):
+            return None
+
+        # Regime filter: don't buy "oversold" in a bear market (catching falling knives)
+        # Walk-forward showed VWAP lost -$1,043 in April crash buying dips in a downtrend
+        if self.sc.vwap_require_bullish_regime and self._market_regime == "bearish":
+            return None
+
         return self._check_entry(candidate, bars, indicators)
 
     # ------------------------------------------------------------------
@@ -89,7 +98,12 @@ class VWAPReversionStrategy(BaseStrategy):
                 atr_stop = price - (self.config.risk.default_stop_atr_multiple * atr_val)
                 stop_loss = min(swing_low, atr_stop)
             else:
-                stop_loss = swing_low - (price * 0.002)  # fallback: 0.2% below swing low
+                stop_loss = swing_low - (price * 0.003)
+
+            # Enforce minimum stop distance floor
+            min_stop_dist = price * (self.config.risk.min_stop_pct / 100.0)
+            if price - stop_loss < min_stop_dist:
+                stop_loss = price - min_stop_dist
 
             # Target: VWAP or midpoint between price and VWAP
             target = vwap_val  # primary target is reversion to VWAP

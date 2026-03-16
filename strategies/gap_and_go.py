@@ -60,6 +60,10 @@ class GapAndGoStrategy(BaseStrategy):
         if self.active_count >= self.sc.max_trades_per_strategy:
             return None
 
+        # Block re-entry after stop-out
+        if self.is_blocked(candidate.symbol):
+            return None
+
         # Must be a gapper
         if abs(candidate.gap_pct) < self.sc.gap_min_pct:
             return None
@@ -136,25 +140,35 @@ class GapAndGoStrategy(BaseStrategy):
                 self._pullback_state[sym] = state
                 return None
 
-            pullback_high = max(float(b["h"]) for b in bars[pullback_idx:pullback_idx + 3] if pullback_idx + 3 <= len(bars))
+            end_idx = min(pullback_idx + 3, len(bars))
+            pb_bars = bars[pullback_idx:end_idx]
+            if not pb_bars:
+                self._pullback_state[sym] = state
+                return None
+            pullback_high = max(float(b["h"]) for b in pb_bars)
 
             # Entry trigger: current close above pullback high
             if price > pullback_high:
                 state["phase"] = "entered"
                 self._pullback_state[sym] = state
 
-                stop_loss = state["pullback_low"] - (price * 0.001)  # just below pullback low
+                stop_loss = state["pullback_low"] - (price * 0.002)  # below pullback low
+                
+                atr_val = indicators.get("atr_14")
+                if atr_val and atr_val > 0:
+                    atr_stop = price - (self.config.risk.default_stop_atr_multiple * atr_val)
+                    stop_loss = min(stop_loss, atr_stop)
+
+                # Enforce minimum stop distance floor
+                min_stop_dist = price * (self.config.risk.min_stop_pct / 100.0)
+                if price - stop_loss < min_stop_dist:
+                    stop_loss = price - min_stop_dist
+
                 risk = price - stop_loss
                 if risk <= 0:
                     return None
 
                 take_profit = price + (risk * self.config.risk.take_profit_rr_ratio)
-
-                atr_val = indicators.get("atr_14")
-                if atr_val and atr_val > 0:
-                    # Ensure stop is at least 1 ATR away
-                    atr_stop = price - (self.config.risk.default_stop_atr_multiple * atr_val)
-                    stop_loss = min(stop_loss, atr_stop)
 
                 strength = self._calculate_strength(candidate, indicators)
 

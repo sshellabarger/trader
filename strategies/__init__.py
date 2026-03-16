@@ -63,6 +63,8 @@ class BaseStrategy(ABC):
         self.config = config
         self.logger = logger or logging.getLogger(f"strategy.{self.name}")
         self._active_trades: Dict[str, Signal] = {}  # symbol → entry signal
+        self._stopped_out: set = set()  # symbols stopped out today (no re-entry)
+        self._market_regime: str = "unknown"  # "bullish", "bearish", "unknown"
 
     @abstractmethod
     def evaluate(
@@ -86,12 +88,32 @@ class BaseStrategy(ABC):
         """
         ...
 
+    def is_blocked(self, symbol: str) -> bool:
+        """Check if symbol is blocked from re-entry (stopped out today)."""
+        if not self.config.strategy.block_reentry_after_stop:
+            return False
+        return symbol in self._stopped_out
+
     def on_fill(self, symbol: str, signal: Signal):
         """Called when an order for this strategy is filled."""
         if signal.action == SignalAction.ENTER:
             self._active_trades[symbol] = signal
         elif signal.action == SignalAction.EXIT:
             self._active_trades.pop(symbol, None)
+
+    def on_stop_loss(self, symbol: str):
+        """Called when a position is closed by stop loss."""
+        self._stopped_out.add(symbol)
+        self._active_trades.pop(symbol, None)
+
+    def reset_daily(self):
+        """Reset daily state (called at start of each trading day)."""
+        self._active_trades.clear()
+        self._stopped_out.clear()
+
+    def set_market_regime(self, regime: str):
+        """Set the current market regime (called by engine/backtester)."""
+        self._market_regime = regime
 
     def has_position(self, symbol: str) -> bool:
         return symbol in self._active_trades

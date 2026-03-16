@@ -1,11 +1,12 @@
 """
-CLI — command-line entry point for DayTrader v2.
+CLI — ETF-focused day trading.
 
 Usage:
-  python -m daytrader run              # start live/paper trading
-  python -m daytrader run --dry-run    # signals only, no orders
-  python -m daytrader backtest         # run backtest
-  python -m daytrader backtest --start 2025-01-02 --end 2025-01-31
+  python -m trader run              # paper trade TQQQ
+  python -m trader run --dry-run    # signals only
+  python -m trader backtest --start 2025-01-02 --end 2025-06-30
+  python -m trader backtest --start 2025-01-02 --end 2025-06-30 --symbol TQQQ
+  python -m trader walkforward --start 2025-01-02 --end 2025-06-30 --symbol TQQQ
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import sys
 from .config import Config
 from .engine import Engine
 from .backtest import Backtester
-from .universe import get_universe, get_universe_stats
+from .walkforward import WalkForwardValidator
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +35,12 @@ def cmd_run(args):
     config = Config()
     config.dry_run = args.dry_run
     config.log_level = args.log_level
+    if args.symbol:
+        config.strategy.primary_symbol = args.symbol
+        config.strategy.use_leveraged = False
     setup_logging(config.log_level, config.log_file)
 
-    if args.symbols:
-        universe = args.symbols.split(",")
-    elif args.categories:
-        universe = get_universe(args.categories.split(","))
-    else:
-        universe = get_universe()
-
-    logger.info(f"Universe: {len(universe)} symbols")
-    engine = Engine(config, universe=universe)
+    engine = Engine(config)
     engine.run(loop_interval=args.interval)
 
 
@@ -53,50 +49,78 @@ def cmd_backtest(args):
     config.log_level = args.log_level
     setup_logging(config.log_level)
 
-    if args.symbols:
-        symbols = args.symbols.split(",")
-    elif args.categories:
-        symbols = get_universe(args.categories.split(","))
-    else:
-        # Default to most active stocks for backtest (not entire universe)
-        symbols = get_universe(["mega_cap", "tech_volatile"])[:30]
-
+    symbol = args.symbol or config.strategy.primary_symbol
     bt = Backtester(config)
-    result = bt.run(symbols, start_date=args.start, end_date=args.end)
+    result = bt.run([symbol], start_date=args.start, end_date=args.end)
 
     print(f"\n{'='*50}")
-    print(f"Total return: {result.total_return_pct:+.2f}%  (${result.total_pnl:+,.2f})")
-    print(f"Trades: {result.total_trades}  Win rate: {result.win_rate:.1f}%")
-    print(f"Profit factor: {result.profit_factor:.2f}  Sharpe: {result.sharpe_ratio:.2f}")
-    print(f"Max drawdown: {result.max_drawdown_pct:.2f}%")
-    print(f"Avg hold: {result.avg_hold_minutes:.0f} min  Trades/day: {result.trades_per_day:.1f}")
+    print(f"BACKTEST: {symbol} {args.start} -> {args.end}")
+    print(f"  Return: {result.total_return_pct:+.2f}%  (${result.total_pnl:+,.2f})")
+    print(f"  Capital: ${result.initial_capital:,.0f} -> ${result.final_capital:,.2f}")
+    print(f"  Trades: {result.total_trades}  Win rate: {result.win_rate:.1f}%")
+    print(f"  Avg win: ${result.avg_win:,.2f}  Avg loss: ${result.avg_loss:,.2f}")
+    print(f"  Profit factor: {result.profit_factor:.2f}  Sharpe: {result.sharpe_ratio:.2f}")
+    print(f"  Max drawdown: {result.max_drawdown_pct:.2f}%")
     for strat, stats in result.by_strategy.items():
         print(f"  [{strat}] {stats['trades']} trades, {stats['win_rate']:.0f}% win, ${stats['pnl']:+,.2f}")
 
 
+def cmd_walkforward(args):
+    config = Config()
+    config.log_level = args.log_level
+    setup_logging(config.log_level)
+
+    symbol = args.symbol or config.strategy.primary_symbol
+
+    wf = WalkForwardValidator(
+        config,
+        train_days=args.train_days,
+        test_days=args.test_days,
+        step_days=args.step_days,
+    )
+    result = wf.run([symbol], start_date=args.start, end_date=args.end)
+
+    print(f"\n{'='*60}")
+    print(f"WALK-FORWARD: {symbol}")
+    print(f"{'='*60}")
+    print(f"  {'':24s} {'TRAIN':>10s} {'TEST':>10s}")
+    print(f"  {'P&L':24s} ${result.total_train_pnl:>+9,.2f} ${result.total_test_pnl:>+9,.2f}")
+    print(f"  {'Trades':24s} {result.total_train_trades:>10d} {result.total_test_trades:>10d}")
+    print(f"  {'Win rate':24s} {result.train_win_rate:>9.1f}% {result.test_win_rate:>9.1f}%")
+    print(f"  {'Profit factor':24s} {result.train_profit_factor:>10.2f} {result.test_profit_factor:>10.2f}")
+    print()
+    if result.consistent:
+        print("  VERDICT: CONSISTENT")
+    elif result.total_train_pnl > 0 and result.total_test_pnl <= 0:
+        print("  VERDICT: OVERFITTING")
+    elif result.total_train_pnl <= 0:
+        print("  VERDICT: NO EDGE")
+    else:
+        print("  VERDICT: MIXED")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="DayTrader v2")
+    parser = argparse.ArgumentParser(description="DayTrader v2 — ETF Edition")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     sub = parser.add_subparsers(dest="command")
 
-    # Run
-    run_parser = sub.add_parser("run", help="Start live/paper trading")
-    run_parser.add_argument("--dry-run", action="store_true", help="Signal-only mode")
-    run_parser.add_argument("--interval", type=int, default=30, help="Loop interval seconds")
-    run_parser.add_argument("--symbols", type=str, default="", help="Comma-separated symbols")
-    run_parser.add_argument("--categories", type=str, default="",
-                            help="Comma-separated universe categories (e.g. mega_cap,tech_volatile)")
+    run_p = sub.add_parser("run", help="Start trading")
+    run_p.add_argument("--dry-run", action="store_true", help="Signal-only mode")
+    run_p.add_argument("--interval", type=int, default=30, help="Loop interval seconds")
+    run_p.add_argument("--symbol", type=str, default="", help="Override primary symbol")
 
-    # Backtest
-    bt_parser = sub.add_parser("backtest", help="Run backtest")
-    bt_parser.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
-    bt_parser.add_argument("--end", required=True, help="End date YYYY-MM-DD")
-    bt_parser.add_argument("--symbols", type=str, default="", help="Comma-separated symbols")
-    bt_parser.add_argument("--categories", type=str, default="",
-                            help="Comma-separated universe categories")
+    bt_p = sub.add_parser("backtest", help="Run backtest")
+    bt_p.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
+    bt_p.add_argument("--end", required=True, help="End date YYYY-MM-DD")
+    bt_p.add_argument("--symbol", type=str, default="", help="Symbol to test")
 
-    # Universe info
-    sub.add_parser("universe", help="Show universe statistics")
+    wf_p = sub.add_parser("walkforward", help="Walk-forward validation")
+    wf_p.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
+    wf_p.add_argument("--end", required=True, help="End date YYYY-MM-DD")
+    wf_p.add_argument("--symbol", type=str, default="", help="Symbol")
+    wf_p.add_argument("--train-days", type=int, default=40)
+    wf_p.add_argument("--test-days", type=int, default=20)
+    wf_p.add_argument("--step-days", type=int, default=20)
 
     args = parser.parse_args()
 
@@ -104,29 +128,10 @@ def main():
         cmd_run(args)
     elif args.command == "backtest":
         cmd_backtest(args)
-    elif args.command == "universe":
-        cmd_universe()
+    elif args.command == "walkforward":
+        cmd_walkforward(args)
     else:
         parser.print_help()
-
-
-def cmd_universe():
-    """Print universe breakdown."""
-    stats = get_universe_stats()
-    print(f"\nDayTrader v2 Universe: {stats['total_symbols']} total symbols")
-    print(f"  Stocks: {stats['stocks_only']}  |  ETFs: {stats['etfs_only']}\n")
-
-    from .universe import UNIVERSE
-    for cat, syms in UNIVERSE.items():
-        count = len(syms)
-        preview = ", ".join(syms[:8])
-        more = f" ... +{count - 8} more" if count > 8 else ""
-        print(f"  {cat:20s} ({count:3d}):  {preview}{more}")
-
-    print(f"\nUsage:")
-    print(f"  python -m daytrader run --categories mega_cap,tech_volatile")
-    print(f"  python -m daytrader run --symbols AAPL,TSLA,NVDA")
-    print(f"  python -m daytrader run                 (uses full universe)")
 
 
 if __name__ == "__main__":

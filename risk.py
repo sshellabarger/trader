@@ -85,8 +85,10 @@ class RiskManager:
         if stop_distance == 0:
             stop_distance = entry * 0.01  # fallback 1%
 
-        # Risk amount
+        # Risk amount (% of equity, capped by max dollar risk)
         risk_amount = equity * (self.config.risk_per_trade_pct / 100.0)
+        if hasattr(self.config, 'max_risk_dollars') and self.config.max_risk_dollars > 0:
+            risk_amount = min(risk_amount, self.config.max_risk_dollars)
 
         # Shares from risk
         risk_shares = int(risk_amount / stop_distance)

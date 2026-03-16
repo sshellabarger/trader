@@ -29,16 +29,32 @@ class AlpacaBroker:
             "APCA-API-SECRET-KEY": config.api_secret,
             "Accept": "application/json",
         })
+        # Rate limiter: track request timestamps
+        self._request_times: list = []
+        self._max_requests_per_minute: int = 180  # stay under Alpaca's 200/min
 
     # ------------------------------------------------------------------
     # Internal request helper
     # ------------------------------------------------------------------
 
+    def _throttle(self):
+        """Proactive rate limiting — pause if approaching the limit."""
+        now = time.time()
+        # Prune requests older than 60 seconds
+        self._request_times = [t for t in self._request_times if now - t < 60]
+        if len(self._request_times) >= self._max_requests_per_minute:
+            wait = 60 - (now - self._request_times[0]) + 0.5
+            if wait > 0:
+                logger.debug(f"Throttling: {wait:.1f}s pause to avoid rate limit")
+                time.sleep(wait)
+
     def _request(
         self, method: str, url: str, params: Optional[Dict] = None,
         json_body: Optional[Dict] = None, retries: int = 2
     ) -> Optional[Any]:
+        self._throttle()
         for attempt in range(retries + 1):
+            self._request_times.append(time.time())
             try:
                 resp = self.session.request(method, url, params=params, json=json_body, timeout=15)
                 if resp.status_code == 429:

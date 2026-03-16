@@ -1,27 +1,24 @@
 """
-Configuration — all settings in one place with sensible defaults.
-Override via environment variables or a config dict passed at runtime.
-Auto-loads .env file on import if present.
+Configuration — ETF-focused day trading on TQQQ.
+Based on Zarattini & Aziz (2023) ORB + VWAP research.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 
-# Auto-load .env file before reading any env vars
 from .dotenv import load_dotenv
 _env_loaded = load_dotenv()
 
 
 @dataclass
 class BrokerConfig:
-    """Alpaca connection settings."""
     api_key: str = ""
     api_secret: str = ""
-    base_url: str = "https://paper-api.alpaca.markets"  # paper by default
+    base_url: str = "https://paper-api.alpaca.markets"
     data_url: str = "https://data.alpaca.markets"
-    data_feed: str = "iex"  # "iex" (free) or "sip" (paid)
+    data_feed: str = "iex"
 
     def __post_init__(self):
         self.api_key = self.api_key or os.getenv("APCA_API_KEY_ID", "")
@@ -32,111 +29,103 @@ class BrokerConfig:
 
 @dataclass
 class ScannerConfig:
-    """Pre-market and intraday scanner settings."""
-    min_price: float = 5.0
-    max_price: float = 500.0
-    min_volume: int = 500_000          # minimum avg daily volume
-    min_relative_volume: float = 1.5   # today vol / avg vol
-    min_gap_pct: float = 2.0           # minimum gap % for Gap & Go
-    max_gap_pct: float = 15.0          # avoid blow-off gaps
-    min_float: float = 0               # 0 = no filter
-    max_candidates: int = 20           # top N to track
-    premarket_scan_time: str = "09:00" # ET — when to start scanning
-    universe_file: str = ""            # optional CSV of tickers
+    """Minimal — ETF mode doesn't need full scanner."""
+    min_price: float = 1.0
+    max_price: float = 10000.0
+    min_volume: int = 100_000
+    min_relative_volume: float = 0.5
+    min_gap_pct: float = 2.0
+    max_gap_pct: float = 15.0
+    min_float: float = 0
+    max_candidates: int = 5
+    premarket_scan_time: str = "09:00"
+    universe_file: str = ""
 
 
 @dataclass
 class StrategyConfig:
-    """Per-strategy toggles and parameters."""
-    # Opening Range Breakout
+    """ETF-focused strategy settings."""
+
+    primary_symbol: str = "QQQ"
+    leveraged_bull: str = "TQQQ"
+    leveraged_bear: str = "SQQQ"
+    use_leveraged: bool = True
+
+    # Opening Range Breakout (5-minute ORB per Zarattini/Aziz paper)
     orb_enabled: bool = True
-    orb_range_minutes: int = 15        # first 15 min to define range
-    orb_min_range_pct: float = 0.3     # minimum range size as % of price
-    orb_max_range_pct: float = 3.0     # skip if range is too wide
-    orb_volume_confirm: bool = True    # require volume surge on breakout
-    orb_confirmation_bars: int = 2     # bars above/below range to confirm
+    orb_range_minutes: int = 5
+    orb_trade_both_directions: bool = True  # long on bullish days, short on bearish days
+    orb_profit_target_r: float = 10.0
+    orb_exit_at_close: bool = True
+    orb_min_range_dollars: float = 0.10
+    orb_max_range_atr_ratio: float = 3.0
 
     # VWAP Reversion
     vwap_enabled: bool = True
-    vwap_deviation_pct: float = 1.0    # min % away from VWAP to trigger
-    vwap_rsi_oversold: float = 30.0    # RSI threshold for long entry
-    vwap_rsi_overbought: float = 70.0  # RSI threshold for short entry
-    vwap_bb_period: int = 20           # Bollinger Band lookback
-    vwap_bb_std: float = 2.0           # Bollinger Band std devs
-
-    # Gap & Go
-    gap_enabled: bool = True
-    gap_min_pct: float = 3.0           # minimum gap to qualify
-    gap_volume_surge: float = 2.0      # volume must be Nx average
-    gap_first_pullback: bool = True    # wait for first pullback to enter
-    gap_max_entry_minutes: int = 60    # stop looking after N min
+    vwap_deviation_pct: float = 0.5
+    vwap_rsi_oversold: float = 30.0
+    vwap_rsi_overbought: float = 70.0
+    vwap_bb_period: int = 20
+    vwap_bb_std: float = 2.0
+    vwap_require_bullish_regime: bool = True
+    vwap_regime_ema_period: int = 20
 
     # General
-    bar_size: str = "1Min"             # candle size for signals
-    lookback_days: int = 20            # historical bars for indicators
-    max_trades_per_strategy: int = 3   # concurrent trades per strategy
+    bar_size: str = "1Min"
+    block_reentry_after_stop: bool = True
+    max_trades_per_strategy: int = 1
+    vwap_regime_symbol: str = "QQQ"
 
 
 @dataclass
 class RiskConfig:
-    """Risk management parameters."""
-    # Position sizing
-    risk_per_trade_pct: float = 1.0    # % of equity risked per trade
-    max_position_pct: float = 10.0     # max single position as % of equity
-    max_positions: int = 6             # max concurrent positions
-    max_total_exposure_pct: float = 60.0
+    risk_per_trade_pct: float = 3.0
+    max_position_pct: float = 80.0
+    max_positions: int = 2
+    max_total_exposure_pct: float = 90.0
 
-    # Stop losses
-    default_stop_atr_multiple: float = 1.5  # stop = entry ± N × ATR
-    trailing_stop_enabled: bool = True
-    trailing_stop_atr_multiple: float = 2.0
-    hard_stop_pct: float = 3.0        # absolute max loss per trade
+    default_stop_atr_multiple: float = 2.5
+    min_stop_pct: float = 0.3
+    trailing_stop_enabled: bool = False
+    trailing_stop_atr_multiple: float = 3.0
+    hard_stop_pct: float = 5.0
 
-    # Take profit
-    take_profit_rr_ratio: float = 2.0  # reward:risk target
-    partial_exit_pct: float = 50.0     # sell half at 1R, rest at 2R
-    partial_exit_at_rr: float = 1.0    # R-multiple for first exit
+    take_profit_rr_ratio: float = 10.0
+    partial_exit_pct: float = 0.0
+    partial_exit_at_rr: float = 0.0
+    max_risk_dollars: float = 3000.0
 
-    # Daily limits
-    daily_loss_limit_pct: float = 2.0  # stop trading after N% loss
-    max_daily_trades: int = 30
+    daily_loss_limit_pct: float = 6.0
+    max_daily_trades: int = 10
     close_all_eod: bool = True
-    eod_minutes_before_close: int = 15
+    eod_minutes_before_close: int = 5
 
-    # Time filters
-    no_trade_first_minutes: int = 0    # optional: wait N min after open
-    no_trade_last_minutes: int = 30    # stop new entries before close
+    no_trade_first_minutes: int = 0
+    no_trade_last_minutes: int = 15
 
 
 @dataclass
 class BacktestConfig:
-    """Backtesting parameters."""
     initial_capital: float = 100_000.0
-    commission_per_share: float = 0.0  # Alpaca is commission-free
-    slippage_bps: float = 3.0          # estimated slippage in basis points
-    fill_delay_seconds: int = 1        # simulated fill delay
+    commission_per_share: float = 0.0035
+    slippage_bps: float = 2.0
 
 
 @dataclass
 class Config:
-    """Top-level configuration container."""
     broker: BrokerConfig = field(default_factory=BrokerConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
 
-    # Logging
     log_level: str = "INFO"
     log_file: str = "daytrader.log"
-
-    # Mode
     paper_trading: bool = True
-    dry_run: bool = False  # if True, generate signals but don't submit orders
+    dry_run: bool = False
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
-        """Build Config from a flat or nested dictionary."""
         cfg = cls()
         for section_name in ("broker", "scanner", "strategy", "risk", "backtest"):
             section_data = d.get(section_name, {})
@@ -148,3 +137,8 @@ class Config:
             if k in d:
                 setattr(cfg, k, d[k])
         return cfg
+
+    def get_trading_symbols(self) -> List[str]:
+        if self.strategy.use_leveraged:
+            return [self.strategy.leveraged_bull]
+        return [self.strategy.primary_symbol]
