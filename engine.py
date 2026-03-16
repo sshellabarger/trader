@@ -138,17 +138,23 @@ class Engine:
 
         # Detect regime
         try:
+            start_dt = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
             spy_bars = self.broker.get_bars(
                 self.primary, timeframe="1Day",
-                start=(datetime.now() - timedelta(days=60)).isoformat(),
+                start=start_dt,
                 limit=60,
             )
-            regime = self.regime_detector.update_from_bars(spy_bars)
+            regime = self.regime_detector.update_from_bars(spy_bars or [])
             for s in self.strategies:
                 s.reset_daily()
                 s.set_market_regime(regime)
             status = self.regime_detector.status()
-            logger.info(f"Regime: {regime} ({self.primary}=${status['spy_price']:.2f})")
+            price = status.get('spy_price')
+            ema = status.get('spy_ema')
+            if price and ema:
+                logger.info(f"Regime: {regime} ({self.primary}=${price:.2f}, EMA=${ema:.2f})")
+            else:
+                logger.info(f"Regime: {regime}")
         except Exception as exc:
             logger.warning(f"Regime detection failed: {exc}")
             for s in self.strategies:
