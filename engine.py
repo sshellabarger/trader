@@ -103,6 +103,10 @@ class Engine:
         if not self.broker.is_market_open():
             return
 
+        # Clear bars cache so we get fresh data each tick
+        self._bars_cache.clear()
+        self._indicators_cache.clear()
+
         minutes_left = self.broker.minutes_until_close()
 
         if self.risk.should_close_all(minutes_left):
@@ -169,10 +173,16 @@ class Engine:
         broker_positions = self.broker.get_positions()
         position_map = {p["symbol"]: p for p in broker_positions}
 
-        # Use primary symbol for analysis (QQQ), but trade leveraged versions
         bars = self._get_bars(self.primary)
-        if not bars or len(bars) < 10:
+        if not bars:
+            logger.info(f"No bars yet for {self.primary}")
             return signals
+        if len(bars) < 6:
+            logger.info(f"{self.primary}: {len(bars)} bars (need 6+ for ORB)")
+            return signals
+
+        logger.info(f"{self.primary}: {len(bars)} bars, "
+                    f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
 
         indicators = compute_indicators(bars)
 
