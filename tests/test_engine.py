@@ -267,7 +267,8 @@ def test_one_orb_entry_per_day_across_symbols(monkeypatch):
     broker = FakeBroker(bars_by_symbol={"TQQQ": bull_tqqq, "SQQQ": bull_sqqq})
     # SQQQ's fixture range is ~1.7% of price; disable the %-band cap so the test
     # isolates the one-entry-per-day cross-symbol guard, not range sizing.
-    engine = make_engine(broker, orb_max_range_pct=0)
+    # The bear leg is off by default now; opt it back in so both symbols trade.
+    engine = make_engine(broker, orb_max_range_pct=0, orb_trade_both_directions=True)
     engine._get_bars = lambda sym: broker.bars_by_symbol.get(sym, [])
 
     signals = engine._generate_signals()
@@ -409,3 +410,25 @@ def test_last_filled_exit_none_when_no_closing_fill(monkeypatch):
          "filled_avg_price": "70.0", "type": "market"},           # only the entry
     ])
     assert broker.last_filled_exit("TQQQ", "buy") is None
+
+
+# --------------------------------------------------------------------------
+# Trading-symbol set — the bear (SQQQ) leg is OFF by default (2026-06-13
+# diagnosis: SQQQ ORB had negative expectancy in every coherent slice; the
+# TQQQ-only profile was +29%/PF 1.64/Sharpe 2.75). It must stay re-enableable.
+# --------------------------------------------------------------------------
+
+def test_default_trading_symbols_are_tqqq_only():
+    cfg = Config()
+    assert cfg.get_trading_symbols() == ["TQQQ"]   # bear leg off by default
+
+
+def test_bear_leg_reenables_when_both_directions_on():
+    cfg = Config()
+    cfg.strategy.orb_trade_both_directions = True
+    assert cfg.get_trading_symbols() == ["TQQQ", "SQQQ"]
+
+
+def test_engine_trades_tqqq_only_by_default():
+    engine = make_engine(_broker())
+    assert engine.symbols == ["TQQQ"]

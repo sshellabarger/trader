@@ -57,7 +57,18 @@ class StrategyConfig:
     # ORB is long-only per instrument. "Both directions" is realized by also
     # trading the inverse ETF (leveraged_bear): a down-Nasdaq day breaks SQQQ
     # UP, so we go long SQQQ instead of shorting TQQQ.
-    orb_trade_both_directions: bool = True  # include leveraged_bear in the trading set
+    #
+    # DEFAULT OFF (2026-06-13 diagnosis): the SQQQ bear leg has negative
+    # expectancy in every coherent backtest slice analysed (full-history union:
+    # n=56, -$868, 21% win, PF 0.97; H1-2025: -$1,135, 21% win). It is an
+    # unhedged counter-trend long that loses through the Nasdaq's upward drift,
+    # and it drove most of the H1-2025 drawdown. The coherent TQQQ-only run
+    # (2025-01-02..2026-03-10) was +29.0%, PF 1.64, Sharpe 2.75, max DD 2.6% —
+    # so trading the bull instrument alone is the strong, validated profile.
+    # Re-enable ONLY behind regime alignment (orb_require_regime_alignment) so
+    # the bear leg trades exclusively in confirmed bearish regimes, and only
+    # once that combination is validated out-of-sample on fresh data.
+    orb_trade_both_directions: bool = False  # include leveraged_bear in the trading set
     orb_entry_window_minutes: int = 3  # how long after the range completes an entry is allowed
     orb_min_range_bars: int = 3  # require this many 1-min bars inside the opening range
     orb_profit_target_r: float = 10.0
