@@ -8,6 +8,7 @@ import logging
 import time
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from .broker import AlpacaBroker
 from .config import Config
@@ -21,6 +22,8 @@ from .strategies.orb import ORBStrategy
 from .strategies.vwap_reversion import VWAPReversionStrategy
 
 logger = logging.getLogger(__name__)
+
+_ET = ZoneInfo("America/New_York")
 
 
 class Engine:
@@ -56,6 +59,8 @@ class Engine:
         self._today: Optional[str] = None
         self._bars_cache: Dict[str, List[Dict]] = {}
         self._indicators_cache: Dict[str, Dict] = {}
+        self._flatten_requested = False  # EOD liquidation issued for today
+        self._pending_close: set = set()  # symbols committed to exit, retried each tick
 
     def run(self, loop_interval: int = 30):
         logger.info("=" * 60)
@@ -108,12 +113,22 @@ class Engine:
         self._indicators_cache.clear()
 
         minutes_left = self.broker.minutes_until_close()
+        closing = self.risk.should_close_all(minutes_left)
 
-        if self.risk.should_close_all(minutes_left):
-            self._close_all_positions("end_of_day")
+        if closing:
+            self._flatten_all("end_of_day")
+
+        # Always reconcile: positions that have left the book (a bracket TP/SL
+        # fill, or the just-issued EOD flatten) are journaled at their real fill
+        # prices. Liquidation is async, so the EOD close is booked here over the
+        # next tick(s) rather than assumed complete inline.
+        self._check_exits(reconcile_only=closing)
+        if closing:
             return
 
-        self._check_exits()
+        # Retry any committed exit whose close hasn't confirmed yet, so a
+        # position whose protective legs were cancelled is never left naked.
+        self._retry_pending_closes()
 
         if self.risk.should_stop_new_entries(minutes_left):
             return
@@ -122,8 +137,21 @@ class Engine:
         signals = self._generate_signals()
 
         for signal in signals:
-            if signal.action == SignalAction.ENTER:
-                self._execute_entry(signal)
+            if signal.action != SignalAction.ENTER:
+                continue
+            strat = self._strategy_named(signal.strategy)
+            # can_open() catches cross-symbol caps (e.g. one ORB entry/day) that
+            # evaluate() can't see: all signals are generated before any fill, so
+            # without this a choppy open could enter both TQQQ and SQQQ at once.
+            if strat is not None and not strat.can_open(signal.symbol):
+                continue
+            self._execute_entry(signal)
+
+    def _strategy_named(self, name: str) -> Optional[BaseStrategy]:
+        for s in self.strategies:
+            if s.name == name:
+                return s
+        return None
 
     def _new_day(self, today: str):
         if self._today is not None:
@@ -135,6 +163,8 @@ class Engine:
         self._today = today
         self._bars_cache.clear()
         self._indicators_cache.clear()
+        self._flatten_requested = False
+        self._pending_close.clear()
 
         equity = self.broker.get_equity()
         if equity > 0:
@@ -173,44 +203,43 @@ class Engine:
         broker_positions = self.broker.get_positions()
         position_map = {p["symbol"]: p for p in broker_positions}
 
-        bars = self._get_bars(self.primary)
-        if not bars:
-            logger.info(f"No bars yet for {self.primary}")
-            return signals
-        if len(bars) < 6:
-            logger.info(f"{self.primary}: {len(bars)} bars (need 6+ for ORB)")
-            return signals
+        # Evaluate each traded symbol against its own bars so signal prices
+        # are always in the traded instrument's terms.
+        for sym in self.symbols:
+            bars = self._get_bars(sym)
+            if not bars:
+                logger.info(f"No bars yet for {sym}")
+                continue
 
-        logger.info(f"{self.primary}: {len(bars)} bars, "
-                    f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
+            logger.info(f"{sym}: {len(bars)} bars, "
+                        f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
 
-        indicators = compute_indicators(bars)
+            indicators = compute_indicators(bars)
 
-        # Build a candidate from the primary ETF
-        candidate = Candidate(
-            symbol=self.primary,
-            price=float(bars[-1]["c"]),
-            prev_close=float(bars[0]["o"]),
-            gap_pct=0,
-            change_pct=0,
-            volume=float(bars[-1]["v"]),
-            avg_volume=float(bars[0]["v"]),
-            relative_volume=indicators.get("relative_volume", 1) or 1,
-            high=max(float(b["h"]) for b in bars),
-            low=min(float(b["l"]) for b in bars),
-            open_price=float(bars[0]["o"]),
-        )
+            candidate = Candidate(
+                symbol=sym,
+                price=float(bars[-1]["c"]),
+                prev_close=float(bars[0]["o"]),
+                gap_pct=0,
+                change_pct=0,
+                volume=float(bars[-1]["v"]),
+                avg_volume=float(bars[0]["v"]),
+                relative_volume=indicators.get("relative_volume", 1) or 1,
+                high=max(float(b["h"]) for b in bars),
+                low=min(float(b["l"]) for b in bars),
+                open_price=float(bars[0]["o"]),
+            )
 
-        for strategy in self.strategies:
-            # Check which symbols this strategy might trade
-            for sym in self.symbols:
-                position = position_map.get(sym)
+            position = position_map.get(sym)
+            for strategy in self.strategies:
+                if not strategy.applies_to(sym):
+                    continue
                 try:
                     signal = strategy.evaluate(candidate, bars, indicators, position)
                     if signal is not None:
                         signals.append(signal)
                 except Exception as exc:
-                    logger.error(f"Strategy {strategy.name} error: {exc}")
+                    logger.error(f"Strategy {strategy.name} error: {exc}", exc_info=True)
 
         signals.sort(key=lambda s: s.strength, reverse=True)
         return signals
@@ -220,9 +249,17 @@ class Engine:
         if cached:
             return cached
 
-        today = date.today()
-        start = datetime(today.year, today.month, today.day, 4, 0).isoformat() + "-05:00"
-        bars = self.broker.get_bars(symbol, timeframe="1Min", start=start, limit=500)
+        # Regular session only (09:30 ET onward) so indicators and the ORB
+        # opening range see the same data live as in the backtester.
+        now = datetime.now(_ET)
+        start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        if now <= start:
+            return []
+        bars = self.broker.get_bars(
+            symbol, timeframe="1Min",
+            start=start.isoformat(), end=now.isoformat(),
+            limit=500,
+        )
         if bars:
             self._bars_cache[symbol] = bars
         return bars
@@ -262,7 +299,7 @@ class Engine:
             for s in self.strategies:
                 if s.name == signal.strategy:
                     s.on_fill(signal.symbol, signal)
-            self.risk.record_trade()
+            self.risk.record_entry()
             return
 
         order = self.broker.submit_bracket_order(
@@ -282,9 +319,11 @@ class Engine:
             for s in self.strategies:
                 if s.name == signal.strategy:
                     s.on_fill(signal.symbol, signal)
-            self.risk.record_trade()
+            self.risk.record_entry()
+        else:
+            logger.warning(f"Order not accepted for {signal.symbol}; signal not consumed")
 
-    def _check_exits(self):
+    def _check_exits(self, reconcile_only: bool = False):
         if not self.journal.open_trades:
             return
 
@@ -294,15 +333,18 @@ class Engine:
         for sym, trade_record in list(self.journal.open_trades.items()):
             position = position_map.get(sym)
             if position is None:
-                self.journal.close_trade(sym, trade_record.entry_price, "external_close")
-                self.risk.clear_symbol(sym)
+                self._reconcile_vanished_position(sym, trade_record)
+                continue
+            if reconcile_only:
+                # During the EOD flatten we only book positions that have left
+                # the book; we don't run strategy-exit logic or re-close.
                 continue
 
             current_price = float(position.get("current_price", 0))
             if current_price <= 0:
                 continue
 
-            bars = self._get_bars(self.primary)
+            bars = self._get_bars(sym)
             if not bars:
                 continue
             indicators = compute_indicators(bars)
@@ -322,6 +364,48 @@ class Engine:
                 if signal and signal.action == SignalAction.EXIT:
                     self._execute_exit(sym, current_price, signal)
 
+    def _reconcile_vanished_position(self, symbol: str, trade_record):
+        """A tracked position is gone from the broker — almost always a bracket
+        TP/SL leg filled. Journal it at the REAL fill price/reason instead of
+        assuming the entry price (which would record $0 P&L)."""
+        entry_side = "buy" if trade_record.direction == "long" else "sell"
+        exit_price = trade_record.entry_price
+        reason = "external_close"
+
+        fill = None
+        if not self.config.dry_run:
+            try:
+                fill = self.broker.last_filled_exit(symbol, entry_side)
+            except Exception as exc:
+                logger.warning(f"Exit reconciliation lookup failed for {symbol}: {exc}")
+        if fill:
+            exit_price = fill["price"]
+            reason = fill["reason"]
+        else:
+            bars = self._get_bars(symbol)
+            if bars:
+                exit_price = float(bars[-1]["c"])  # last known price beats entry price
+
+        record = self.journal.close_trade(symbol, exit_price, reason)
+        self.risk.clear_symbol(symbol)
+        if record:
+            self.risk.record_pnl(record.pnl)
+            if reason == "stop_loss":
+                for s in self.strategies:
+                    if s.name == record.strategy:
+                        s.on_stop_loss(symbol)
+
+    def _wait_orders_cleared(self, symbol: str, tries: int = 3, delay: float = 1.0) -> bool:
+        """Poll until the symbol has no open orders. Alpaca cancellation is
+        async, so we confirm the bracket legs are gone before liquidating —
+        otherwise the close is rejected and the position is left unprotected."""
+        for attempt in range(tries):
+            if not self.broker.get_orders(status="open", symbols=[symbol]):
+                return True
+            if attempt < tries - 1:
+                time.sleep(delay)
+        return not self.broker.get_orders(status="open", symbols=[symbol])
+
     def _execute_exit(self, symbol: str, price: float, signal: Signal):
         logger.info(f"EXIT: {signal.strategy} → close {symbol} @ {price:.2f}: {signal.reason}")
 
@@ -329,29 +413,57 @@ class Engine:
             record = self.journal.close_trade(symbol, price, signal.reason)
             self.risk.clear_symbol(symbol)
             if record:
-                self.risk.record_trade(record.pnl)
+                self.risk.record_pnl(record.pnl)
             return
 
+        # Commit to flattening this position. Once we cancel the protective
+        # bracket legs the shares are exposed, so we must guarantee the close
+        # completes — track it in _pending_close and retry every tick until the
+        # broker confirms, rather than deferring into a naked position.
+        self._pending_close.add(symbol)
+        self._force_close(symbol, price, signal.reason)
+
+    def _force_close(self, symbol: str, price: float, reason: str):
+        """Cancel the symbol's bracket legs and liquidate. On success, journal
+        and drop it from _pending_close; on failure, keep it for next-tick retry
+        (the position may have already vanished via a leg fill, which the
+        reconcile path then books)."""
+        self.broker.cancel_orders_for_symbol(symbol)
+        self._wait_orders_cleared(symbol)  # best effort; retry covers the rest
         result = self.broker.close_position(symbol)
         if result:
-            record = self.journal.close_trade(symbol, price, signal.reason)
+            record = self.journal.close_trade(symbol, price, reason)
             self.risk.clear_symbol(symbol)
+            self._pending_close.discard(symbol)
             if record:
-                self.risk.record_trade(record.pnl)
+                self.risk.record_pnl(record.pnl)
+        else:
+            logger.error(f"close_position failed for {symbol}; will retry next tick")
 
-    def _close_all_positions(self, reason: str):
-        positions = self.broker.get_positions()
-        if not positions:
+    def _retry_pending_closes(self):
+        if not self._pending_close:
             return
-
-        logger.info(f"Closing all {len(positions)} positions: {reason}")
-        for pos in positions:
-            sym = pos["symbol"]
+        position_map = {p["symbol"]: p for p in self.broker.get_positions()}
+        for sym in list(self._pending_close):
+            pos = position_map.get(sym)
+            if pos is None:
+                # Already gone (a leg filled): let reconciliation book it.
+                self._pending_close.discard(sym)
+                continue
             price = float(pos.get("current_price", pos.get("avg_entry_price", 0)))
-            if not self.config.dry_run:
-                self.broker.close_position(sym)
-            self.journal.close_trade(sym, price, reason)
-            self.risk.clear_symbol(sym)
+            self._force_close(sym, price, "exit_retry")
+
+    def _flatten_all(self, reason: str):
+        """Issue an EOD account flatten (cancel all orders + liquidate). Async:
+        positions don't vanish immediately, so journaling is left to
+        _reconcile_vanished_position on this and subsequent ticks, which books
+        each close at its real fill price. Issued once per day."""
+        if self.config.dry_run or self._flatten_requested:
+            return
+        if self.broker.get_positions():
+            logger.info(f"Flattening all positions: {reason}")
+            self.broker.close_all_positions(cancel_orders=True)
+            self._flatten_requested = True
 
     def _get_position_infos(self) -> List[PositionInfo]:
         positions = self.broker.get_positions()
@@ -374,7 +486,27 @@ class Engine:
     def _shutdown(self):
         logger.info("Shutting down...")
         if self.config.risk.close_all_eod:
-            self._close_all_positions("shutdown")
+            self._flatten_requested = False  # allow a fresh flatten on shutdown
+            self._flatten_all("shutdown")
+            # No more ticks will run, so book the async liquidation here with a
+            # bounded poll instead of relying on "subsequent ticks".
+            if not self.config.dry_run:
+                for _ in range(10):
+                    self._check_exits(reconcile_only=True)
+                    if not self.journal.open_trades:
+                        break
+                    time.sleep(1.5)
+            else:
+                self._check_exits(reconcile_only=True)
+            # Backstop: never leave the daily record missing a close — book any
+            # straggler at its last known price.
+            for sym, rec in list(self.journal.open_trades.items()):
+                bars = self._get_bars(sym)
+                price = float(bars[-1]["c"]) if bars else rec.entry_price
+                record = self.journal.close_trade(sym, price, "shutdown_close")
+                self.risk.clear_symbol(sym)
+                if record:
+                    self.risk.record_pnl(record.pnl)
         self.journal.save_daily_csv()
         self.journal.save_daily_summary()
         logger.info("Engine stopped.")

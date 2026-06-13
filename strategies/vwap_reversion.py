@@ -29,6 +29,12 @@ class VWAPReversionStrategy(BaseStrategy):
         super().__init__(config, logger)
         self.sc = config.strategy
 
+    def applies_to(self, symbol: str) -> bool:
+        # Only the bull instrument: the regime filter is keyed to QQQ, so
+        # buying "oversold" dips on the inverse ETF (SQQQ) would invert the
+        # falling-knife protection and buy into QQQ strength.
+        return symbol in self.config.vwap_symbols()
+
     def evaluate(
         self,
         candidate: Candidate,

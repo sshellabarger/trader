@@ -118,8 +118,11 @@ class AlpacaBroker:
             params["qty"] = str(qty)
         return self._request("DELETE", f"{self.base_url}/v2/positions/{symbol}", params=params)
 
-    def close_all_positions(self) -> Optional[Any]:
-        return self._request("DELETE", f"{self.base_url}/v2/positions")
+    def close_all_positions(self, cancel_orders: bool = False) -> Optional[Any]:
+        """Liquidate all positions. With cancel_orders=True, Alpaca cancels all
+        open orders first so held shares are freed for the liquidating order."""
+        params = {"cancel_orders": "true"} if cancel_orders else None
+        return self._request("DELETE", f"{self.base_url}/v2/positions", params=params)
 
     # ------------------------------------------------------------------
     # Orders
@@ -186,8 +189,24 @@ class AlpacaBroker:
         logger.info(f"BRACKET → {side.upper()} {qty} {symbol} TP={take_profit_price} SL={stop_loss_price}")
         return self._request("POST", f"{self.base_url}/v2/orders", json_body=body)
 
-    def get_orders(self, status: str = "open") -> List[Dict]:
-        result = self._request("GET", f"{self.base_url}/v2/orders", params={"status": status})
+    def get_orders(
+        self,
+        status: str = "open",
+        symbols: Optional[List[str]] = None,
+        limit: int = 100,
+        direction: str = "desc",
+        nested: bool = False,
+    ) -> List[Dict]:
+        params: Dict[str, Any] = {
+            "status": status,
+            "limit": limit,
+            "direction": direction,
+        }
+        if symbols:
+            params["symbols"] = ",".join(symbols)
+        if nested:
+            params["nested"] = "true"
+        result = self._request("GET", f"{self.base_url}/v2/orders", params=params)
         return result if isinstance(result, list) else []
 
     def cancel_order(self, order_id: str) -> Optional[Dict]:
@@ -195,6 +214,49 @@ class AlpacaBroker:
 
     def cancel_all_orders(self) -> Optional[Any]:
         return self._request("DELETE", f"{self.base_url}/v2/orders")
+
+    def cancel_orders_for_symbol(self, symbol: str) -> int:
+        """Cancel all open orders for one symbol (e.g. the live bracket's TP/SL
+        legs) so the held shares are freed before liquidating the position.
+        Returns the number of cancel requests issued."""
+        open_orders = self.get_orders(status="open", symbols=[symbol])
+        count = 0
+        for order in open_orders:
+            oid = order.get("id")
+            if oid:
+                self.cancel_order(oid)
+                count += 1
+        return count
+
+    def last_filled_exit(self, symbol: str, entry_side: str) -> Optional[Dict]:
+        """Find the most recently filled order that CLOSED a position in
+        `symbol` (i.e. the side opposite the entry), and classify it.
+
+        Returns {"price": float, "reason": "take_profit"|"stop_loss"|"close",
+        "filled_at": str} or None if no closing fill is found. Used to journal
+        a bracket exit at its real fill price instead of guessing.
+        """
+        exit_side = "sell" if entry_side == "buy" else "buy"
+        closed = self.get_orders(status="closed", symbols=[symbol], limit=50)
+        best: Optional[Dict] = None
+        for o in closed:
+            if o.get("side") != exit_side:
+                continue
+            if not o.get("filled_at") or o.get("status") != "filled":
+                continue
+            price = o.get("filled_avg_price")
+            if price is None:
+                continue
+            if best is None or o["filled_at"] > best["filled_at"]:
+                otype = (o.get("type") or o.get("order_type") or "").lower()
+                if "stop" in otype:
+                    reason = "stop_loss"
+                elif "limit" in otype:
+                    reason = "take_profit"
+                else:
+                    reason = "close"
+                best = {"price": float(price), "reason": reason, "filled_at": o["filled_at"]}
+        return best
 
     # ------------------------------------------------------------------
     # Market Data — Historical Bars

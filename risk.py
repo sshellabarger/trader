@@ -231,8 +231,13 @@ class RiskManager:
     # Bookkeeping
     # ------------------------------------------------------------------
 
-    def record_trade(self, pnl: float = 0.0):
+    def record_entry(self):
+        """Count one round-trip against the daily trade limit (on entry)."""
         self.daily_trade_count += 1
+
+    def record_pnl(self, pnl: float):
+        """Accumulate realized P&L for the day (on exit). Does not affect the
+        daily trade count — a round-trip is counted once, at entry."""
         self.daily_pnl += pnl
 
     def clear_symbol(self, symbol: str):

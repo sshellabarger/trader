@@ -88,6 +88,26 @@ class BaseStrategy(ABC):
         """
         ...
 
+    def applies_to(self, symbol: str) -> bool:
+        """Whether this strategy is allowed to trade `symbol`.
+
+        Default: every traded symbol. Strategies whose edge is direction- or
+        instrument-specific (e.g. mean reversion gated by a market regime)
+        override this to restrict themselves.
+        """
+        return True
+
+    def can_open(self, symbol: str) -> bool:
+        """Whether the strategy may open a NEW position right now, checked by
+        the engine just before each queued entry executes.
+
+        This catches cross-symbol limits that evaluate() can't see within a
+        single tick: evaluate() runs for every symbol before any order fills,
+        so a per-day cap enforced only via on_fill would let two symbols slip
+        through the same tick. Default: always.
+        """
+        return True
+
     def is_blocked(self, symbol: str) -> bool:
         """Check if symbol is blocked from re-entry (stopped out today)."""
         if not self.config.strategy.block_reentry_after_stop:

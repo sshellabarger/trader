@@ -54,7 +54,12 @@ class StrategyConfig:
     # Opening Range Breakout (5-minute ORB per Zarattini/Aziz paper)
     orb_enabled: bool = True
     orb_range_minutes: int = 5
-    orb_trade_both_directions: bool = True  # long on bullish days, short on bearish days
+    # ORB is long-only per instrument. "Both directions" is realized by also
+    # trading the inverse ETF (leveraged_bear): a down-Nasdaq day breaks SQQQ
+    # UP, so we go long SQQQ instead of shorting TQQQ.
+    orb_trade_both_directions: bool = True  # include leveraged_bear in the trading set
+    orb_entry_window_minutes: int = 3  # how long after the range completes an entry is allowed
+    orb_min_range_bars: int = 3  # require this many 1-min bars inside the opening range
     orb_profit_target_r: float = 10.0
     orb_exit_at_close: bool = True
     orb_min_range_dollars: float = 0.10
@@ -109,6 +114,9 @@ class BacktestConfig:
     initial_capital: float = 100_000.0
     commission_per_share: float = 0.0035
     slippage_bps: float = 2.0
+    # Buying power as a multiple of equity, to mirror the live margin account
+    # (Alpaca paper RegT ~2x). The old hardcoded 0.5 under-sized vs live.
+    margin_multiple: float = 2.0
 
 
 @dataclass
@@ -139,6 +147,26 @@ class Config:
         return cfg
 
     def get_trading_symbols(self) -> List[str]:
+        """Symbols the engine actually trades.
+
+        In leveraged mode we trade the bull ETF (long on up days) and, when
+        both-directions is on, also the bear ETF (long on down days) so the
+        bot profits whether the Nasdaq rises or falls — without shorting.
+        """
+        if self.strategy.use_leveraged:
+            symbols = [self.strategy.leveraged_bull]
+            if self.strategy.orb_trade_both_directions:
+                symbols.append(self.strategy.leveraged_bear)
+            return symbols
+        return [self.strategy.primary_symbol]
+
+    def vwap_symbols(self) -> List[str]:
+        """Symbols VWAP reversion may trade.
+
+        Only the bull instrument: the regime filter is keyed to QQQ, so
+        running mean-reversion on the inverse ETF would invert the
+        falling-knife protection.
+        """
         if self.strategy.use_leveraged:
             return [self.strategy.leveraged_bull]
         return [self.strategy.primary_symbol]

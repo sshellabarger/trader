@@ -12,6 +12,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from .broker import AlpacaBroker
 from .config import Config
@@ -25,6 +26,30 @@ from .strategies.orb import ORBStrategy
 from .strategies.vwap_reversion import VWAPReversionStrategy
 
 logger = logging.getLogger(__name__)
+
+_ET = ZoneInfo("America/New_York")
+
+
+def session_window(day_str: str) -> Tuple[str, str]:
+    """
+    Regular-session start/end for a trading day as ISO strings with the
+    correct ET offset for that date (handles EST/EDT transitions).
+    """
+    day = datetime.strptime(day_str, "%Y-%m-%d")
+    start = day.replace(hour=9, minute=30, tzinfo=_ET)
+    end = day.replace(hour=16, minute=0, tzinfo=_ET)
+    return start.isoformat(), end.isoformat()
+
+
+def minutes_to_close(t_iso: str) -> Optional[float]:
+    """Minutes from a bar's timestamp to the 16:00 ET close, or None if the
+    timestamp can't be parsed. Used to mirror the engine's EOD gating."""
+    try:
+        dt = datetime.fromisoformat(t_iso.replace("Z", "+00:00")).astimezone(_ET)
+    except (ValueError, AttributeError):
+        return None
+    close_dt = dt.replace(hour=16, minute=0, second=0, microsecond=0)
+    return (close_dt - dt).total_seconds() / 60.0
 
 
 @dataclass
@@ -75,13 +100,17 @@ class Backtester:
         if self.config.strategy.vwap_enabled:
             strategies.append(VWAPReversionStrategy(self.config))
 
-        primary = symbols[0] if symbols else self.config.strategy.primary_symbol
+        traded = list(symbols) if symbols else self.config.get_trading_symbols()
+        label = "+".join(traded)
 
+        # Regime mirrors the live engine: always the primary index (QQQ),
+        # never the leveraged instrument being traded.
+        regime_symbol = self.config.strategy.primary_symbol
         regime_detector = RegimeDetector(
             ema_period=self.config.strategy.vwap_regime_ema_period
         )
-        regime_daily_bars = self._fetch_regime_bars(primary, start_date, end_date)
-        logger.info(f"Regime: {len(regime_daily_bars)} daily bars for {primary}")
+        regime_daily_bars = self._fetch_regime_bars(regime_symbol, start_date, end_date)
+        logger.info(f"Regime: {len(regime_daily_bars)} daily bars for {regime_symbol}")
 
         all_trades: List[TradeRecord] = []
         equity_curve: List[Tuple[str, float]] = []
@@ -91,7 +120,7 @@ class Backtester:
         end = datetime.strptime(end_date, "%Y-%m-%d").date()
         trading_days = 0
 
-        logger.info(f"Backtest: {start_date} -> {end_date}, symbol={primary}, "
+        logger.info(f"Backtest: {start_date} -> {end_date}, symbols={label}, "
                      f"capital=${capital:,.0f}")
 
         while current <= end:
@@ -101,8 +130,8 @@ class Backtester:
 
             day_str = current.isoformat()
 
-            bars = self._fetch_day_bars(primary, day_str)
-            if not bars or len(bars) < 20:
+            day_bars = {sym: self._fetch_day_bars(sym, day_str) for sym in traded}
+            if not any(len(b) >= 20 for b in day_bars.values()):
                 current += timedelta(days=1)
                 continue
 
@@ -110,8 +139,11 @@ class Backtester:
             risk.reset_daily(capital)
             day_start_capital = capital
 
+            # Strictly PRIOR days only: the live engine computes regime pre-open,
+            # when the current day's daily bar does not yet exist. Using "<=" here
+            # would leak the simulated day's own close (lookahead bias).
             bars_up_to_today = [
-                b for b in regime_daily_bars if b.get("t", "")[:10] <= day_str
+                b for b in regime_daily_bars if b.get("t", "")[:10] < day_str
             ]
             regime = regime_detector.update_from_bars(bars_up_to_today)
 
@@ -120,7 +152,7 @@ class Backtester:
                 s.set_market_regime(regime)
 
             capital, day_trades = self._simulate_day(
-                bars, strategies, risk, capital, open_positions, primary
+                day_bars, strategies, risk, capital, open_positions
             )
 
             all_trades.extend(day_trades)
@@ -139,10 +171,10 @@ class Backtester:
             capital, start_date, end_date, trading_days
         )
         result.trades = all_trades
-        result.symbol = primary
+        result.symbol = label
 
         logger.info(f"\n{'='*50}")
-        logger.info(f"BACKTEST: {start_date} -> {end_date} ({primary})")
+        logger.info(f"BACKTEST: {start_date} -> {end_date} ({label})")
         logger.info(f"  Return: {result.total_return_pct:+.2f}%  P&L: ${result.total_pnl:+,.2f}")
         logger.info(f"  Trades: {result.total_trades}  Win rate: {result.win_rate:.1f}%")
         logger.info(f"  Sharpe: {result.sharpe_ratio:.2f}  Max DD: {result.max_drawdown_pct:.2f}%")
@@ -156,99 +188,120 @@ class Backtester:
 
     # ------------------------------------------------------------------
 
+    def _apply_slippage(self, direction: str, price: float) -> float:
+        """Exit fill price after slippage. A long exit SELLS (receives less);
+        a short exit BUYS to cover (pays more)."""
+        if direction == "short":
+            return price * (1 + self.slippage_pct)
+        return price * (1 - self.slippage_pct)
+
+    def _book_exit(
+        self, pos: Dict, sym: str, exit_price: float, reason: str,
+        exit_time: str, trades: List[TradeRecord], strategies: List[BaseStrategy],
+    ) -> float:
+        """Close a simulated position: build the record, fire on_stop_loss when
+        relevant, append to trades, and return the realized P&L."""
+        qty = pos["qty"]
+        direction = pos.get("direction", "long")
+        if direction == "short":
+            pnl = (pos["entry"] - exit_price) * qty - self.commission * qty * 2
+        else:
+            pnl = (exit_price - pos["entry"]) * qty - self.commission * qty * 2
+        record = TradeRecord(
+            symbol=sym, strategy=pos["strategy"], direction=direction,
+            qty=qty, entry_time=pos["entry_time"],
+            entry_price=pos["entry"], entry_reason=pos.get("reason", ""),
+            stop_loss=pos["stop"], take_profit=pos["tp"],
+        )
+        record.close(exit_price, reason, exit_time)
+        # record.close() recomputes a commission-free pnl; overwrite with the
+        # net figure that actually moved capital so win-rate/profit-factor/
+        # daily_pnl all agree with the equity curve.
+        record.pnl = pnl
+        record.is_winner = pnl > 0
+        trades.append(record)
+        if reason == "stop_loss":
+            for s in strategies:
+                if s.name == pos["strategy"]:
+                    s.on_stop_loss(sym)
+        return pnl
+
     def _simulate_day(
         self,
-        bars: List[Dict],
+        day_bars: Dict[str, List[Dict]],
         strategies: List[BaseStrategy],
         risk: RiskManager,
         capital: float,
         open_positions: Dict[str, Dict],
-        primary: str,
     ) -> Tuple[float, List[TradeRecord]]:
-        trades: List[TradeRecord] = []
-        max_bars = len(bars)
+        """Simulate one session across all traded symbols on a shared timeline.
 
-        for bar_idx in range(5, max_bars):
-            bars_so_far = bars[:bar_idx + 1]
+        Each symbol is evaluated against its own bars; positions, capital, and
+        the daily trade counter are shared. EOD entry-cutoff and force-flatten
+        mirror the live engine (no_trade_last_minutes / eod_minutes_before_close).
+        """
+        trades: List[TradeRecord] = []
+        warmup = 5  # bars before a symbol is eligible (range + indicators)
+        bp = capital * self.config.backtest.margin_multiple  # mirror live buying power
+
+        # Merge all symbols' bars into one time-ordered event stream. Ties broken
+        # by the traded-symbol order (e.g. TQQQ before SQQQ) so the per-day ORB
+        # cap resolves the SAME instrument the live engine would pick.
+        order_index = {sym: i for i, sym in enumerate(day_bars)}
+        events = []
+        for sym, bars in day_bars.items():
+            for idx in range(len(bars)):
+                events.append((bars[idx].get("t", ""), sym, idx))
+        events.sort(key=lambda e: (e[0], order_index[e[1]]))
+
+        for t_iso, sym, idx in events:
+            if idx < warmup:
+                continue
+            bars = day_bars[sym]
+            bars_so_far = bars[: idx + 1]
             current_bar = bars_so_far[-1]
             current_price = float(current_bar["c"])
             current_high = float(current_bar["h"])
             current_low = float(current_bar["l"])
+            ctime = current_bar.get("t", "")
+            mins_left = minutes_to_close(t_iso)
 
-            # --- Check exits on open positions ---
-            for sym in list(open_positions.keys()):
+            # --- Exit handling for this symbol's open position ---
+            if sym in open_positions:
                 pos = open_positions[sym]
+                direction = pos.get("direction", "long")
 
-                if pos.get("direction") == "short":
+                # EOD forced flatten (mirror live should_close_all)
+                if mins_left is not None and mins_left <= self.config.risk.eod_minutes_before_close:
+                    exit_price = self._apply_slippage(direction, current_price)
+                    capital += self._book_exit(pos, sym, exit_price, "eod_close", ctime, trades, strategies)
+                    risk.record_pnl(trades[-1].pnl)
+                    del open_positions[sym]
+                    continue
+
+                # Intrabar stop / take-profit
+                exit_price = None
+                reason = None
+                if direction == "short":
                     if current_high >= pos["stop"]:
-                        exit_price = pos["stop"] * (1 + self.slippage_pct)
-                        pnl = (pos["entry"] - exit_price) * pos["qty"] - self.commission * pos["qty"] * 2
-                        capital += pnl
-                        record = TradeRecord(
-                            symbol=sym, strategy=pos["strategy"], direction="short",
-                            qty=pos["qty"], entry_time=pos["entry_time"],
-                            entry_price=pos["entry"], entry_reason=pos.get("reason", ""),
-                            stop_loss=pos["stop"], take_profit=pos["tp"],
-                        )
-                        record.close(exit_price, "stop_loss", current_bar.get("t", ""))
-                        trades.append(record)
-                        for s in strategies:
-                            if s.name == pos["strategy"]:
-                                s.on_stop_loss(sym)
-                        del open_positions[sym]
-                        continue
-
-                    if current_low <= pos["tp"]:
-                        exit_price = pos["tp"] * (1 + self.slippage_pct)
-                        pnl = (pos["entry"] - exit_price) * pos["qty"] - self.commission * pos["qty"] * 2
-                        capital += pnl
-                        record = TradeRecord(
-                            symbol=sym, strategy=pos["strategy"], direction="short",
-                            qty=pos["qty"], entry_time=pos["entry_time"],
-                            entry_price=pos["entry"], entry_reason=pos.get("reason", ""),
-                            stop_loss=pos["stop"], take_profit=pos["tp"],
-                        )
-                        record.close(exit_price, "take_profit", current_bar.get("t", ""))
-                        trades.append(record)
-                        del open_positions[sym]
-                        continue
+                        exit_price, reason = self._apply_slippage("short", pos["stop"]), "stop_loss"
+                    elif current_low <= pos["tp"]:
+                        exit_price, reason = self._apply_slippage("short", pos["tp"]), "take_profit"
                 else:
                     if current_low <= pos["stop"]:
-                        exit_price = pos["stop"] * (1 - self.slippage_pct)
-                        pnl = (exit_price - pos["entry"]) * pos["qty"] - self.commission * pos["qty"] * 2
-                        capital += pnl
-                        record = TradeRecord(
-                            symbol=sym, strategy=pos["strategy"], direction="long",
-                            qty=pos["qty"], entry_time=pos["entry_time"],
-                            entry_price=pos["entry"], entry_reason=pos.get("reason", ""),
-                            stop_loss=pos["stop"], take_profit=pos["tp"],
-                        )
-                        record.close(exit_price, "stop_loss", current_bar.get("t", ""))
-                        trades.append(record)
-                        for s in strategies:
-                            if s.name == pos["strategy"]:
-                                s.on_stop_loss(sym)
-                        del open_positions[sym]
-                        continue
+                        exit_price, reason = self._apply_slippage("long", pos["stop"]), "stop_loss"
+                    elif current_high >= pos["tp"]:
+                        exit_price, reason = self._apply_slippage("long", pos["tp"]), "take_profit"
 
-                    if current_high >= pos["tp"]:
-                        exit_price = pos["tp"] * (1 - self.slippage_pct)
-                        pnl = (exit_price - pos["entry"]) * pos["qty"] - self.commission * pos["qty"] * 2
-                        capital += pnl
-                        record = TradeRecord(
-                            symbol=sym, strategy=pos["strategy"], direction="long",
-                            qty=pos["qty"], entry_time=pos["entry_time"],
-                            entry_price=pos["entry"], entry_reason=pos.get("reason", ""),
-                            stop_loss=pos["stop"], take_profit=pos["tp"],
-                        )
-                        record.close(exit_price, "take_profit", current_bar.get("t", ""))
-                        trades.append(record)
-                        del open_positions[sym]
-                        continue
+                if exit_price is not None:
+                    capital += self._book_exit(pos, sym, exit_price, reason, ctime, trades, strategies)
+                    risk.record_pnl(trades[-1].pnl)
+                    del open_positions[sym]
+                    continue
 
-                # Strategy-based exit
+                # Strategy-driven exit
                 indicators = compute_indicators(bars_so_far)
-                candidate = Candidate(
+                ex_candidate = Candidate(
                     symbol=sym, price=current_price, prev_close=pos["entry"],
                     gap_pct=0, change_pct=0, volume=0, avg_volume=1,
                     relative_volume=1, high=current_price, low=current_price,
@@ -256,52 +309,49 @@ class Backtester:
                 )
                 mock_pos = {"symbol": sym, "current_price": current_price,
                             "avg_entry_price": pos["entry"]}
-
                 for strategy in strategies:
                     if strategy.name != pos["strategy"]:
                         continue
-                    signal = strategy.evaluate(candidate, bars_so_far, indicators, mock_pos)
+                    signal = strategy.evaluate(ex_candidate, bars_so_far, indicators, mock_pos)
                     if signal and signal.action == SignalAction.EXIT:
-                        exit_price = current_price * (1 - self.slippage_pct)
-                        direction = pos.get("direction", "long")
-                        if direction == "short":
-                            pnl = (pos["entry"] - exit_price) * pos["qty"] - self.commission * pos["qty"] * 2
-                        else:
-                            pnl = (exit_price - pos["entry"]) * pos["qty"] - self.commission * pos["qty"] * 2
-                        capital += pnl
-                        record = TradeRecord(
-                            symbol=sym, strategy=pos["strategy"], direction=direction,
-                            qty=pos["qty"], entry_time=pos["entry_time"],
-                            entry_price=pos["entry"], entry_reason=pos.get("reason", ""),
-                            stop_loss=pos["stop"], take_profit=pos["tp"],
-                        )
-                        record.close(exit_price, signal.reason, current_bar.get("t", ""))
-                        trades.append(record)
+                        ep = self._apply_slippage(direction, current_price)
+                        capital += self._book_exit(pos, sym, ep, signal.reason, ctime, trades, strategies)
+                        risk.record_pnl(trades[-1].pnl)
                         del open_positions[sym]
                         break
 
-            # --- Check entries ---
+                if sym not in open_positions:
+                    continue  # exited this bar; no entry on the same bar
+
+            # --- Entry handling for this symbol ---
+            if sym in open_positions:
+                continue
             if len(open_positions) >= self.config.risk.max_positions:
+                continue
+            if mins_left is not None and mins_left <= self.config.risk.no_trade_last_minutes:
                 continue
 
             indicators = compute_indicators(bars_so_far)
+            day_open = float(bars[0]["o"])
             candidate = Candidate(
-                symbol=primary, price=current_price,
-                prev_close=float(bars[0]["o"]),
+                symbol=sym, price=current_price,
+                prev_close=day_open,
                 gap_pct=0,
-                change_pct=((current_price - float(bars[0]["o"])) / float(bars[0]["o"]) * 100),
+                change_pct=((current_price - day_open) / day_open * 100) if day_open else 0,
                 volume=float(current_bar["v"]),
                 avg_volume=float(bars[0]["v"]),
                 relative_volume=indicators.get("relative_volume", 1) or 1,
                 high=max(float(b["h"]) for b in bars_so_far),
                 low=min(float(b["l"]) for b in bars_so_far),
-                open_price=float(bars[0]["o"]),
+                open_price=day_open,
             )
 
             for strategy in strategies:
+                if not strategy.applies_to(sym):
+                    continue
                 signal = strategy.evaluate(candidate, bars_so_far, indicators, None)
                 if signal and signal.action == SignalAction.ENTER:
-                    trade_symbol = primary
+                    trade_symbol = signal.symbol
 
                     positions_list = [
                         PositionInfo(s, 1, p["entry"], current_price,
@@ -309,23 +359,22 @@ class Backtester:
                         for s, p in open_positions.items()
                     ]
                     ok, reason = risk.validate_entry(
-                        signal, capital, capital * 0.5, positions_list
+                        signal, capital, bp, positions_list
                     )
                     if not ok:
                         continue
 
                     size = risk.calculate_position_size(
-                        signal, capital, capital * 0.5, len(open_positions)
+                        signal, capital, bp, len(open_positions)
                     )
                     if size.shares < 1:
                         continue
 
-                    entry_price = current_price * (1 + self.slippage_pct)
-
-                    direction = "long"
-                    if signal.direction == SignalDirection.SHORT:
-                        direction = "short"
+                    direction = "short" if signal.direction == SignalDirection.SHORT else "long"
+                    if direction == "short":
                         entry_price = current_price * (1 - self.slippage_pct)
+                    else:
+                        entry_price = current_price * (1 + self.slippage_pct)
 
                     open_positions[trade_symbol] = {
                         "entry": entry_price,
@@ -333,37 +382,22 @@ class Backtester:
                         "tp": signal.take_profit,
                         "qty": size.shares,
                         "strategy": strategy.name,
-                        "entry_time": current_bar.get("t", ""),
+                        "entry_time": ctime,
                         "reason": signal.reason,
                         "direction": direction,
                     }
                     strategy.on_fill(trade_symbol, signal)
-                    risk.record_trade()
+                    risk.record_entry()
                     break
 
-        # End of day: close remaining
+        # End of day: close anything still open at its symbol's last bar.
         for sym in list(open_positions.keys()):
             pos = open_positions[sym]
-            last_bar = bars[-1]
+            last_bar = day_bars[sym][-1]
             direction = pos.get("direction", "long")
-            exit_price = float(last_bar["c"])
-
-            if direction == "short":
-                exit_price = exit_price * (1 + self.slippage_pct)
-                pnl = (pos["entry"] - exit_price) * pos["qty"] - self.commission * pos["qty"] * 2
-            else:
-                exit_price = exit_price * (1 - self.slippage_pct)
-                pnl = (exit_price - pos["entry"]) * pos["qty"] - self.commission * pos["qty"] * 2
-
-            capital += pnl
-            record = TradeRecord(
-                symbol=sym, strategy=pos["strategy"], direction=direction,
-                qty=pos["qty"], entry_time=pos["entry_time"],
-                entry_price=pos["entry"], entry_reason=pos.get("reason", ""),
-                stop_loss=pos["stop"], take_profit=pos["tp"],
-            )
-            record.close(exit_price, "eod_close", last_bar.get("t", ""))
-            trades.append(record)
+            exit_price = self._apply_slippage(direction, float(last_bar["c"]))
+            capital += self._book_exit(pos, sym, exit_price, "eod_close", last_bar.get("t", ""), trades, strategies)
+            risk.record_pnl(trades[-1].pnl)
 
         open_positions.clear()
         return capital, trades
@@ -371,8 +405,7 @@ class Backtester:
     # ------------------------------------------------------------------
 
     def _fetch_day_bars(self, symbol: str, day_str: str) -> List[Dict]:
-        start = f"{day_str}T09:30:00-05:00"
-        end = f"{day_str}T16:00:00-05:00"
+        start, end = session_window(day_str)
         bars = self.broker.get_bars(symbol, timeframe="1Min", start=start, end=end, limit=500)
         time.sleep(0.3)
         return bars if bars else []

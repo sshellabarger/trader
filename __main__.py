@@ -49,12 +49,14 @@ def cmd_backtest(args):
     config.log_level = args.log_level
     setup_logging(config.log_level)
 
-    symbol = args.symbol or config.strategy.primary_symbol
+    # Default to the exact instruments the live engine trades (e.g. TQQQ+SQQQ
+    # under the leveraged default), so the backtest models live behavior.
+    symbols = [args.symbol] if args.symbol else config.get_trading_symbols()
     bt = Backtester(config)
-    result = bt.run([symbol], start_date=args.start, end_date=args.end)
+    result = bt.run(symbols, start_date=args.start, end_date=args.end)
 
     print(f"\n{'='*50}")
-    print(f"BACKTEST: {symbol} {args.start} -> {args.end}")
+    print(f"BACKTEST: {'+'.join(symbols)} {args.start} -> {args.end}")
     print(f"  Return: {result.total_return_pct:+.2f}%  (${result.total_pnl:+,.2f})")
     print(f"  Capital: ${result.initial_capital:,.0f} -> ${result.final_capital:,.2f}")
     print(f"  Trades: {result.total_trades}  Win rate: {result.win_rate:.1f}%")
@@ -70,7 +72,7 @@ def cmd_walkforward(args):
     config.log_level = args.log_level
     setup_logging(config.log_level)
 
-    symbol = args.symbol or config.strategy.primary_symbol
+    symbols = [args.symbol] if args.symbol else config.get_trading_symbols()
 
     wf = WalkForwardValidator(
         config,
@@ -78,10 +80,10 @@ def cmd_walkforward(args):
         test_days=args.test_days,
         step_days=args.step_days,
     )
-    result = wf.run([symbol], start_date=args.start, end_date=args.end)
+    result = wf.run(symbols, start_date=args.start, end_date=args.end)
 
     print(f"\n{'='*60}")
-    print(f"WALK-FORWARD: {symbol}")
+    print(f"WALK-FORWARD: {'+'.join(symbols)}")
     print(f"{'='*60}")
     print(f"  {'':24s} {'TRAIN':>10s} {'TEST':>10s}")
     print(f"  {'P&L':24s} ${result.total_train_pnl:>+9,.2f} ${result.total_test_pnl:>+9,.2f}")
