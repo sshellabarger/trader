@@ -173,8 +173,10 @@ def test_sparse_range_below_min_bars_no_signal():
     ]
     assert make_strategy().evaluate(make_candidate(bars), bars, {}) is None
 
-    # Lowering the requirement to 2 lets the same data through.
-    assert make_strategy(orb_min_range_bars=2).evaluate(
+    # Lowering the requirement to 2 lets the same data through. (This range is
+    # ~1.1% of price, so disable the upper %-band cap to isolate the bar-count
+    # behavior under test.)
+    assert make_strategy(orb_min_range_bars=2, orb_max_range_pct=0).evaluate(
         make_candidate(bars), bars, {}
     ) is not None
 
@@ -189,6 +191,71 @@ def test_no_entry_after_window_closes():
     filler = [(70.5, 70.6, 70.4, 70.5)] * 5
     bars = build_bars(WINTER, BULL_RANGE + filler)
     assert make_strategy().evaluate(make_candidate(bars), bars, {}) is None
+
+
+def _scaled_range(session, low, high, entry_close, symbol="TQQQ"):
+    """A 5-bar bullish opening range with an explicit low/high (so range size
+    as a %% of price is controllable) plus an entry bar."""
+    o = low
+    rng = [
+        (o, high, low, (low + high) / 2),
+        ((low + high) / 2, high, low, high - 0.01),
+        (high - 0.01, high, low + 0.01, high),
+        (high, high, low + 0.02, high),
+        (high, high, low + 0.02, high),  # close (high) > open (low) -> bullish
+    ]
+    entry = (high, entry_close + 0.05, high, entry_close)
+    bars = build_bars(session, rng + [entry])
+    return bars
+
+
+def test_range_below_min_pct_is_rejected():
+    # Opening range ~0.3% of a ~$70 price -> below the 0.5% floor (noise).
+    bars = _scaled_range(WINTER, low=69.90, high=70.10, entry_close=70.12)
+    assert make_strategy().evaluate(make_candidate(bars), bars, {}) is None
+    # Lowering the floor lets it through.
+    assert make_strategy(orb_min_range_pct=0.1).evaluate(
+        make_candidate(bars), bars, {}
+    ) is not None
+
+
+def test_range_above_max_pct_is_rejected():
+    # Opening range ~2% of price -> above the default cap (whipsaw zone).
+    bars = _scaled_range(WINTER, low=69.30, high=70.70, entry_close=70.75)
+    assert make_strategy().evaluate(make_candidate(bars), bars, {}) is None
+    # Disabling the cap (max=0) lets it through.
+    assert make_strategy(orb_max_range_pct=0).evaluate(
+        make_candidate(bars), bars, {}
+    ) is not None
+
+
+def test_range_inside_band_is_accepted():
+    # ~0.8% range sits inside the 0.5-1.0% band.
+    bars = _scaled_range(WINTER, low=69.72, high=70.28, entry_close=70.30)
+    assert make_strategy().evaluate(make_candidate(bars), bars, {}) is not None
+
+
+def test_regime_alignment_gate_when_enabled():
+    bars = build_bars(WINTER, BULL_RANGE + [BULL_ENTRY])  # ~0.99% range, in band
+
+    # Bull ETF needs a bullish regime when alignment is required.
+    bull_block = make_strategy(orb_require_regime_alignment=True)
+    bull_block.set_market_regime("bearish")
+    assert bull_block.evaluate(make_candidate(bars, "TQQQ"), bars, {}) is None
+
+    bull_ok = make_strategy(orb_require_regime_alignment=True)
+    bull_ok.set_market_regime("bullish")
+    assert bull_ok.evaluate(make_candidate(bars, "TQQQ"), bars, {}) is not None
+
+    # Bear ETF (SQQQ) needs a bearish regime.
+    bear_ok = make_strategy(orb_require_regime_alignment=True)
+    bear_ok.set_market_regime("bearish")
+    assert bear_ok.evaluate(make_candidate(bars, "SQQQ"), bars, {}) is not None
+
+    # Default (alignment off) ignores regime entirely.
+    off = make_strategy()
+    off.set_market_regime("bearish")
+    assert off.evaluate(make_candidate(bars, "TQQQ"), bars, {}) is not None
 
 
 def test_naive_timestamps_fail_closed():

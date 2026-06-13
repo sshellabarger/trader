@@ -140,6 +140,27 @@ class ORBStrategy(BaseStrategy):
             return None
 
         entry_price = float(entry_bar["c"])
+
+        # Opening-range size as a % of price. Filters out (a) sub-noise ranges
+        # that aren't real breakouts and (b) oversized, high-volatility ranges
+        # that whipsaw through the range-low stop. See StrategyConfig for the
+        # H1-2025 evidence behind the 0.5-1.0% default band.
+        if entry_price > 0:
+            range_pct = range_size / entry_price * 100.0
+            if range_pct < self.sc.orb_min_range_pct:
+                return None
+            if self.sc.orb_max_range_pct > 0 and range_pct > self.sc.orb_max_range_pct:
+                return None
+
+        # Optional regime alignment: don't fight the daily trend. Only buy the
+        # bull instrument in a bullish regime, the bear instrument in a bearish
+        # regime. Inert unless explicitly enabled (and regime is known).
+        if self.sc.orb_require_regime_alignment and self._market_regime in ("bullish", "bearish"):
+            sym = candidate.symbol
+            if sym == self.sc.leveraged_bull and self._market_regime != "bullish":
+                return None
+            if sym == self.sc.leveraged_bear and self._market_regime != "bearish":
+                return None
         stop_loss = range_low
         risk = entry_price - stop_loss
         if risk <= 0:

@@ -239,8 +239,12 @@ def test_down_day_profits_via_sqqq():
                   (40.4, 40.6, 40.3, 40.5)]
     sqqq_bars = utc_minute_bars("2025-01-15", 14, 30, sqqq_range + sqqq_entry + sqqq_rise)
 
+    # This fixture's opening range is ~1.7% of price; disable the %-band cap so
+    # the test isolates direction routing (down day -> long SQQQ), not sizing.
+    cfg = Config()
+    cfg.strategy.orb_max_range_pct = 0
     capital, trades = run_day({"TQQQ": tqqq_bars, "SQQQ": sqqq_bars},
-                              [ORBStrategy(Config())])
+                              [ORBStrategy(cfg)])
 
     assert len(trades) == 1                  # one ORB trade for the day
     assert trades[0].symbol == "SQQQ"        # bought the inverse ETF

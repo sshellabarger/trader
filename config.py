@@ -64,6 +64,19 @@ class StrategyConfig:
     orb_exit_at_close: bool = True
     orb_min_range_dollars: float = 0.10
     orb_max_range_atr_ratio: float = 3.0
+    # Opening-range size as a % of price. H1-2025 diagnosis: breakouts with an
+    # opening range < ~0.5% of price are noise (0/11 winners) and oversized
+    # ranges are high-volatility whipsaw days that blow through the range-low
+    # stop. Default band 0.5-1.2% turns H1-2025 from PF 0.87 (-9%) to PF 1.22
+    # (+8.3%). A tighter 0.5-1.0% cap scores higher in-sample (PF 1.52) but is
+    # more curve-fit to that window; widen/tighten per out-of-sample results.
+    # Set max=0 to disable the upper cap.
+    orb_min_range_pct: float = 0.5
+    orb_max_range_pct: float = 1.2
+    # Optional: only take an ORB breakout that agrees with the daily regime
+    # (long the bull ETF only when QQQ is bullish, the bear ETF only when
+    # bearish). Default off — kept inert until validated out-of-sample.
+    orb_require_regime_alignment: bool = False
 
     # VWAP Reversion
     vwap_enabled: bool = True

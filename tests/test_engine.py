@@ -100,8 +100,11 @@ class FakeBroker:
         return self.exit_fill
 
 
-def make_engine(broker):
-    engine = Engine(Config())
+def make_engine(broker, **strategy_overrides):
+    config = Config()
+    for k, v in strategy_overrides.items():
+        setattr(config.strategy, k, v)
+    engine = Engine(config)
     engine.broker = broker
     return engine
 
@@ -262,7 +265,9 @@ def test_one_orb_entry_per_day_across_symbols(monkeypatch):
                              (40.2, 40.4, 40.1, 40.3), (40.3, 40.5, 40.2, 40.4),
                              (40.4, 40.6, 40.3, 40.5), (40.5, 40.8, 40.5, 40.7)])
     broker = FakeBroker(bars_by_symbol={"TQQQ": bull_tqqq, "SQQQ": bull_sqqq})
-    engine = make_engine(broker)
+    # SQQQ's fixture range is ~1.7% of price; disable the %-band cap so the test
+    # isolates the one-entry-per-day cross-symbol guard, not range sizing.
+    engine = make_engine(broker, orb_max_range_pct=0)
     engine._get_bars = lambda sym: broker.bars_by_symbol.get(sym, [])
 
     signals = engine._generate_signals()
