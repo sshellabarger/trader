@@ -96,7 +96,7 @@ class FakeBroker:
         self.close_all_called.append(cancel_orders)
         return {}
 
-    def last_filled_exit(self, symbol, entry_side):
+    def last_filled_exit(self, symbol, entry_side, after=None):
         return self.exit_fill
 
 
@@ -186,6 +186,32 @@ def test_vanished_position_journals_real_stop_fill():
     assert engine.risk.daily_pnl < 0              # record_pnl was called
     orb = next(s for s in engine.strategies if s.name == "orb")
     assert "TQQQ" in orb._stopped_out             # on_stop_loss fired
+
+
+def test_pending_entry_not_booked_as_phantom_exit():
+    # Regression for 2026-06-15: a bracket entry shows no position until it
+    # fills. While the entry order is still working, _check_exits must NOT book
+    # an exit (the old code reconciled it and grabbed a stale fill → phantom
+    # -$9,614 "take_profit").
+    broker = FakeBroker(positions=[])                 # entry not filled yet
+    broker.open_orders = [{"id": "p1", "symbol": "TQQQ", "status": "new"}]
+    broker.exit_fill = {"price": 72.90, "reason": "take_profit", "filled_at": "x"}
+    engine = make_engine(broker)
+    engine.journal.open_trade("TQQQ", "orb", "long", 921,
+                              entry_price=83.34, stop_loss=82.66, take_profit=90.19)
+
+    engine._check_exits()
+
+    assert "TQQQ" in engine.journal.open_trades        # still open — not booked
+    assert engine.journal.closed_trades == []          # no phantom close
+    assert engine.risk.daily_pnl == 0.0                # no P&L recorded
+
+    # Once the entry fills and the position is live, normal handling resumes.
+    broker.open_orders = []
+    broker.positions = [{"symbol": "TQQQ", "current_price": "83.46",
+                         "avg_entry_price": "83.41"}]
+    engine._check_exits()
+    assert "TQQQ" in engine.journal.open_trades        # held, no spurious exit
 
 
 # --------------------------------------------------------------------------
@@ -410,6 +436,31 @@ def test_last_filled_exit_none_when_no_closing_fill(monkeypatch):
          "filled_avg_price": "70.0", "type": "market"},           # only the entry
     ])
     assert broker.last_filled_exit("TQQQ", "buy") is None
+
+
+def test_last_filled_exit_ignores_stale_fill_before_entry(monkeypatch):
+    # The `after` cutoff must exclude a closing fill from an EARLIER session,
+    # which is what caused the 2026-06-15 phantom close (a stale $72.90 sell
+    # limit from a prior day mislabeled this trade's take_profit).
+    broker = _broker()
+    orders = [
+        {"id": "old", "side": "sell", "status": "filled",
+         "filled_at": "2026-06-12T20:00:00Z", "filled_avg_price": "72.90",
+         "type": "limit"},                                        # stale prior session
+        {"id": "new", "side": "sell", "status": "filled",
+         "filled_at": "2026-06-15T18:55:38Z", "filled_avg_price": "84.46",
+         "type": "market"},                                       # today's real exit
+    ]
+    monkeypatch.setattr(broker, "get_orders", lambda **kw: orders)
+
+    # With a cutoff at today's entry, only the post-entry fill qualifies.
+    fill = broker.last_filled_exit("TQQQ", "buy", after="2026-06-15T13:36:05Z")
+    assert fill["price"] == 84.46
+    assert fill["reason"] == "close"
+
+    # If the only candidate predates the entry, nothing is attributed.
+    monkeypatch.setattr(broker, "get_orders", lambda **kw: [orders[0]])
+    assert broker.last_filled_exit("TQQQ", "buy", after="2026-06-15T13:36:05Z") is None
 
 
 # --------------------------------------------------------------------------

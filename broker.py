@@ -16,6 +16,17 @@ from .config import BrokerConfig
 logger = logging.getLogger(__name__)
 
 
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    """Parse an Alpaca ISO 8601 timestamp (e.g. '2026-06-15T13:36:37Z') into an
+    aware datetime, or None if it is missing/unparseable."""
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 class AlpacaBroker:
     """Synchronous Alpaca REST client for stocks."""
 
@@ -228,16 +239,25 @@ class AlpacaBroker:
                 count += 1
         return count
 
-    def last_filled_exit(self, symbol: str, entry_side: str) -> Optional[Dict]:
+    def last_filled_exit(
+        self, symbol: str, entry_side: str, after: Optional[str] = None
+    ) -> Optional[Dict]:
         """Find the most recently filled order that CLOSED a position in
         `symbol` (i.e. the side opposite the entry), and classify it.
 
         Returns {"price": float, "reason": "take_profit"|"stop_loss"|"close",
         "filled_at": str} or None if no closing fill is found. Used to journal
         a bracket exit at its real fill price instead of guessing.
+
+        `after` (ISO 8601), when provided, restricts matches to fills that
+        occurred strictly after that moment — normally this trade's entry time.
+        Without it a stale closing fill from an EARLIER session (still in the
+        last-50 closed orders) can be misattributed to the current trade, which
+        booked a phantom −$9k "take_profit" on 2026-06-15.
         """
         exit_side = "sell" if entry_side == "buy" else "buy"
         closed = self.get_orders(status="closed", symbols=[symbol], limit=50)
+        after_dt = _parse_iso(after)
         best: Optional[Dict] = None
         for o in closed:
             if o.get("side") != exit_side:
@@ -247,6 +267,10 @@ class AlpacaBroker:
             price = o.get("filled_avg_price")
             if price is None:
                 continue
+            if after_dt is not None:
+                filled_dt = _parse_iso(o.get("filled_at"))
+                if filled_dt is None or filled_dt <= after_dt:
+                    continue  # stale: predates this trade's entry
             if best is None or o["filled_at"] > best["filled_at"]:
                 otype = (o.get("type") or o.get("order_type") or "").lower()
                 if "stop" in otype:

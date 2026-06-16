@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -61,6 +61,9 @@ class Engine:
         self._indicators_cache: Dict[str, Dict] = {}
         self._flatten_requested = False  # EOD liquidation issued for today
         self._pending_close: set = set()  # symbols committed to exit, retried each tick
+        # symbol → UTC ISO time the entry was submitted; bounds exit-fill lookups
+        # so a stale prior-session fill can't be booked as this trade's exit.
+        self._entry_time_utc: Dict[str, str] = {}
 
     def run(self, loop_interval: int = 30):
         logger.info("=" * 60)
@@ -165,6 +168,7 @@ class Engine:
         self._indicators_cache.clear()
         self._flatten_requested = False
         self._pending_close.clear()
+        self._entry_time_utc.clear()
 
         equity = self.broker.get_equity()
         if equity > 0:
@@ -316,6 +320,9 @@ class Engine:
                 signal.entry_price, signal.stop_loss, signal.take_profit,
                 signal.reason, signal.indicators,
             )
+            # Stamp the entry time so a later "position gone" reconciliation only
+            # books exit fills that happened after this point.
+            self._entry_time_utc[signal.symbol] = datetime.now(timezone.utc).isoformat()
             for s in self.strategies:
                 if s.name == signal.strategy:
                     s.on_fill(signal.symbol, signal)
@@ -333,6 +340,15 @@ class Engine:
         for sym, trade_record in list(self.journal.open_trades.items()):
             position = position_map.get(sym)
             if position is None:
+                # A journaled trade with no live position is NOT proof the trade
+                # closed: a freshly submitted bracket entry shows no position
+                # until it fills (4 minutes on 2026-06-15). If the symbol still
+                # has working orders, the entry hasn't filled — wait, don't
+                # fabricate an exit. Only once there are no open orders has the
+                # position truly left the book (a leg fill or the EOD flatten),
+                # which reconciliation then books at the real fill price.
+                if self.broker.get_orders(status="open", symbols=[sym]):
+                    continue
                 self._reconcile_vanished_position(sym, trade_record)
                 continue
             if reconcile_only:
@@ -375,7 +391,9 @@ class Engine:
         fill = None
         if not self.config.dry_run:
             try:
-                fill = self.broker.last_filled_exit(symbol, entry_side)
+                fill = self.broker.last_filled_exit(
+                    symbol, entry_side, after=self._entry_time_utc.get(symbol)
+                )
             except Exception as exc:
                 logger.warning(f"Exit reconciliation lookup failed for {symbol}: {exc}")
         if fill:
