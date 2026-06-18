@@ -318,3 +318,20 @@ def test_overnight_gap_min_pct_threshold():
         orb_require_overnight_alignment=True, orb_overnight_gap_min_pct=0.3
     ).evaluate(make_candidate(bars), bars, {"overnight_gap_pct": 0.3})
     assert at is not None
+
+
+def test_env_toggles_overnight_filter():
+    # The deployed bot enables the filter via .env (ORB_REQUIRE_OVERNIGHT_ALIGNMENT).
+    import os
+    from trader.config import StrategyConfig
+    os.environ["ORB_REQUIRE_OVERNIGHT_ALIGNMENT"] = "true"
+    os.environ["ORB_OVERNIGHT_GAP_MIN_PCT"] = "0.25"
+    try:
+        sc = StrategyConfig()
+        assert sc.orb_require_overnight_alignment is True
+        assert sc.orb_overnight_gap_min_pct == 0.25
+    finally:
+        os.environ.pop("ORB_REQUIRE_OVERNIGHT_ALIGNMENT", None)
+        os.environ.pop("ORB_OVERNIGHT_GAP_MIN_PCT", None)
+    # With no env set, the code default stays off.
+    assert StrategyConfig().orb_require_overnight_alignment is False

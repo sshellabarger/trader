@@ -64,6 +64,9 @@ class Engine:
         # symbol → UTC ISO time the entry was submitted; bounds exit-fill lookups
         # so a stale prior-session fill can't be booked as this trade's exit.
         self._entry_time_utc: Dict[str, str] = {}
+        # Today's overnight gap (regime symbol close->open), for the optional ORB
+        # overnight-alignment filter. Recomputed each day in _new_day.
+        self._overnight_gap_pct: Optional[float] = None
 
     def run(self, loop_interval: int = 30):
         logger.info("=" * 60)
@@ -174,6 +177,12 @@ class Engine:
         if equity > 0:
             self.risk.reset_daily(equity)
 
+        # Overnight gap (regime symbol's prior close -> today's open), same
+        # definition the backtester uses. Computed once per day and injected into
+        # indicators in _generate_signals. Fail-open: stays None if it can't be
+        # computed, which leaves the ORB overnight filter inert for the day.
+        self._overnight_gap_pct = None
+
         # Detect regime
         try:
             start_dt = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
@@ -193,6 +202,24 @@ class Engine:
                 logger.info(f"Regime: {regime} ({self.primary}=${price:.2f}, EMA=${ema:.2f})")
             else:
                 logger.info(f"Regime: {regime}")
+
+            # Overnight gap from the same daily bars (no extra API call).
+            if spy_bars and len(spy_bars) >= 2:
+                last_bar = spy_bars[-1]
+                if str(last_bar.get("t", ""))[:10] == today:
+                    prior_close = float(spy_bars[-2].get("c", 0) or 0)
+                    today_open = float(last_bar.get("o", 0) or 0)
+                    if prior_close > 0 and today_open > 0:
+                        self._overnight_gap_pct = (today_open - prior_close) / prior_close * 100.0
+            if self.config.strategy.orb_require_overnight_alignment:
+                if self._overnight_gap_pct is None:
+                    logger.info("Overnight filter ON but gap unavailable — gate inert today")
+                else:
+                    allowed = self._overnight_gap_pct >= self.config.strategy.orb_overnight_gap_min_pct
+                    logger.info(
+                        f"Overnight gap ({self.primary}): {self._overnight_gap_pct:+.2f}%  ->  "
+                        f"ORB longs {'ALLOWED' if allowed else 'BLOCKED'} today"
+                    )
         except Exception as exc:
             logger.warning(f"Regime detection failed: {exc}")
             for s in self.strategies:
@@ -219,12 +246,9 @@ class Engine:
                         f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
 
             indicators = compute_indicators(bars)
-            # NOTE: the optional ORB overnight-alignment gate reads
-            # indicators["overnight_gap_pct"]. The backtester populates it from
-            # the regime symbol's prior-close -> today-open. To use the gate
-            # LIVE, fetch the prior daily close here (the session bars start at
-            # 09:30 so it isn't in `bars`) and set the key. Left unset for now,
-            # which keeps the gate inert live; it is OFF by default regardless.
+            # Supply the day's overnight gap (computed in _new_day) to the ORB
+            # overnight-alignment gate. None when unavailable -> gate inert.
+            indicators["overnight_gap_pct"] = self._overnight_gap_pct
 
             candidate = Candidate(
                 symbol=sym,

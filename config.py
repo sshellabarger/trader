@@ -130,6 +130,27 @@ class StrategyConfig:
     max_trades_per_strategy: int = 1
     vwap_regime_symbol: str = "QQQ"
 
+    def __post_init__(self):
+        # Let the deployed bot toggle the overnight experiments from the
+        # environment (.env) without a code change, mirroring how the broker
+        # keys are configured. Code defaults stay off.
+        def _envbool(name: str, current: bool) -> bool:
+            v = os.getenv(name)
+            if v is None:
+                return current
+            return v.strip().lower() in ("1", "true", "yes", "on")
+
+        self.orb_require_overnight_alignment = _envbool(
+            "ORB_REQUIRE_OVERNIGHT_ALIGNMENT", self.orb_require_overnight_alignment)
+        self.orb_hold_overnight = _envbool(
+            "ORB_HOLD_OVERNIGHT", self.orb_hold_overnight)
+        g = os.getenv("ORB_OVERNIGHT_GAP_MIN_PCT")
+        if g is not None:
+            try:
+                self.orb_overnight_gap_min_pct = float(g)
+            except ValueError:
+                pass
+
 
 @dataclass
 class RiskConfig:
