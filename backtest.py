@@ -147,16 +147,44 @@ class Backtester:
             ]
             regime = regime_detector.update_from_bars(bars_up_to_today)
 
+            # Overnight gap (prior close -> today's open) of the regime symbol,
+            # for the optional ORB overnight-alignment gate. Uses ONLY today's
+            # open (known at the bell) and strictly prior closes, so it adds no
+            # lookahead. None when the prior/today daily bar is unavailable, in
+            # which case the strategy gate stays inert.
+            overnight_gap_pct = None
+            today_daily = next(
+                (b for b in regime_daily_bars if b.get("t", "")[:10] == day_str), None
+            )
+            if bars_up_to_today and today_daily:
+                prior_close = float(bars_up_to_today[-1].get("c", 0) or 0)
+                today_open = float(today_daily.get("o", 0) or 0)
+                if prior_close > 0 and today_open > 0:
+                    overnight_gap_pct = (today_open - prior_close) / prior_close * 100.0
+
             for s in strategies:
                 s.reset_daily()
                 s.set_market_regime(regime)
 
             capital, day_trades = self._simulate_day(
-                day_bars, strategies, risk, capital, open_positions
+                day_bars, strategies, risk, capital, open_positions,
+                overnight_gap_pct=overnight_gap_pct,
             )
 
             all_trades.extend(day_trades)
-            equity_curve.append((day_str, capital))
+            # Mark any position carried overnight to the day's last close, so the
+            # equity curve, Sharpe and drawdown stay honest on holding days
+            # (capital itself only reflects realized trades). No-op when flat.
+            mtm = 0.0
+            for psym, pos in open_positions.items():
+                pbars = day_bars.get(psym)
+                if pbars:
+                    lc = float(pbars[-1]["c"])
+                    if pos.get("direction") == "short":
+                        mtm += (pos["entry"] - lc) * pos["qty"]
+                    else:
+                        mtm += (lc - pos["entry"]) * pos["qty"]
+            equity_curve.append((day_str, capital + mtm))
 
             day_pnl = capital - day_start_capital
             if day_trades:
@@ -165,6 +193,23 @@ class Backtester:
                             f"[{regime}]")
 
             current += timedelta(days=1)
+
+        # Settle any position still held at the very end of the backtest at the
+        # last available close, so realized P&L and metrics include it.
+        for sym in list(open_positions.keys()):
+            pbars = day_bars.get(sym)
+            if not pbars:
+                continue
+            pos = open_positions[sym]
+            lc = float(pbars[-1]["c"])
+            exit_px = self._apply_slippage(pos.get("direction", "long"), lc)
+            capital += self._book_exit(
+                pos, sym, exit_px, "backtest_end", pbars[-1].get("t", ""),
+                all_trades, strategies,
+            )
+            del open_positions[sym]
+        if equity_curve:
+            equity_curve[-1] = (equity_curve[-1][0], capital)
 
         result = self._compute_metrics(
             all_trades, equity_curve, self.config.backtest.initial_capital,
@@ -233,6 +278,7 @@ class Backtester:
         risk: RiskManager,
         capital: float,
         open_positions: Dict[str, Dict],
+        overnight_gap_pct: Optional[float] = None,
     ) -> Tuple[float, List[TradeRecord]]:
         """Simulate one session across all traded symbols on a shared timeline.
 
@@ -243,6 +289,22 @@ class Backtester:
         trades: List[TradeRecord] = []
         warmup = 5  # bars before a symbol is eligible (range + indicators)
         bp = capital * self.config.backtest.margin_multiple  # mirror live buying power
+
+        # Overnight-hold: a position carried in from a prior day exits at THIS
+        # day's open (capturing the overnight close->open move) before any new
+        # intraday logic, so the symbol is free to trade again today.
+        if self.config.strategy.orb_hold_overnight and open_positions:
+            for psym, pbars in day_bars.items():
+                pos = open_positions.get(psym)
+                if pos and pos.get("held_overnight") and pbars:
+                    pdir = pos.get("direction", "long")
+                    open_px = self._apply_slippage(pdir, float(pbars[0]["o"]))
+                    capital += self._book_exit(
+                        pos, psym, open_px, "overnight_exit",
+                        pbars[0].get("t", ""), trades, strategies,
+                    )
+                    risk.record_pnl(trades[-1].pnl)
+                    del open_positions[psym]
 
         # Merge all symbols' bars into one time-ordered event stream. Ties broken
         # by the traded-symbol order (e.g. TQQQ before SQQQ) so the per-day ORB
@@ -271,13 +333,19 @@ class Backtester:
                 pos = open_positions[sym]
                 direction = pos.get("direction", "long")
 
-                # EOD forced flatten (mirror live should_close_all)
+                # EOD forced flatten (mirror live should_close_all). With
+                # overnight-hold ON, an ORB position is NOT force-flattened in
+                # this window; it keeps its stop/TP through the close and the
+                # end-of-day sweep decides whether to carry it overnight.
                 if mins_left is not None and mins_left <= self.config.risk.eod_minutes_before_close:
-                    exit_price = self._apply_slippage(direction, current_price)
-                    capital += self._book_exit(pos, sym, exit_price, "eod_close", ctime, trades, strategies)
-                    risk.record_pnl(trades[-1].pnl)
-                    del open_positions[sym]
-                    continue
+                    hold_orb = (self.config.strategy.orb_hold_overnight
+                                and pos.get("strategy") == "orb")
+                    if not hold_orb:
+                        exit_price = self._apply_slippage(direction, current_price)
+                        capital += self._book_exit(pos, sym, exit_price, "eod_close", ctime, trades, strategies)
+                        risk.record_pnl(trades[-1].pnl)
+                        del open_positions[sym]
+                        continue
 
                 # Intrabar stop / take-profit
                 exit_price = None
@@ -332,6 +400,9 @@ class Backtester:
                 continue
 
             indicators = compute_indicators(bars_so_far)
+            # Same overnight gap for every symbol/bar this day; the ORB gate
+            # reads it only when orb_require_overnight_alignment is enabled.
+            indicators["overnight_gap_pct"] = overnight_gap_pct
             day_open = float(bars[0]["o"])
             candidate = Candidate(
                 symbol=sym, price=current_price,
@@ -390,16 +461,26 @@ class Backtester:
                     risk.record_entry()
                     break
 
-        # End of day: close anything still open at its symbol's last bar.
+        # End of day: close anything still open at its symbol's last bar —
+        # UNLESS overnight-hold is on and the ORB position is a winner at the
+        # close, in which case carry it past the close (it exits at the next
+        # session's open, handled by the day-open pass above). Losers and
+        # non-ORB positions always flatten here.
         for sym in list(open_positions.keys()):
             pos = open_positions[sym]
             last_bar = day_bars[sym][-1]
             direction = pos.get("direction", "long")
-            exit_price = self._apply_slippage(direction, float(last_bar["c"]))
+            last_close = float(last_bar["c"])
+            in_profit = (last_close > pos["entry"]) if direction != "short" else (last_close < pos["entry"])
+            if (self.config.strategy.orb_hold_overnight
+                    and pos.get("strategy") == "orb" and in_profit):
+                pos["held_overnight"] = True
+                continue
+            exit_price = self._apply_slippage(direction, last_close)
             capital += self._book_exit(pos, sym, exit_price, "eod_close", last_bar.get("t", ""), trades, strategies)
             risk.record_pnl(trades[-1].pnl)
+            del open_positions[sym]
 
-        open_positions.clear()
         return capital, trades
 
     # ------------------------------------------------------------------

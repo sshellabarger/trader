@@ -1,0 +1,18 @@
+# Keep the build context small and secrets OUT of the image.
+**/.env
+.env
+.git/
+.gitignore
+__pycache__/
+**/__pycache__/
+*.pyc
+*.old
+.claude/
+.pytest_cache/
+**/.pytest_cache/
+*.log
+trade_logs/
+backtest_results/
+venv/
+.venv/
+.DS_Store

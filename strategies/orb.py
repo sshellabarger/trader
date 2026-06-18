@@ -161,6 +161,17 @@ class ORBStrategy(BaseStrategy):
                 return None
             if sym == self.sc.leveraged_bear and self._market_regime != "bearish":
                 return None
+
+        # Optional overnight-drift alignment: the index's edge lives overnight,
+        # so an ORB long fired after a DOWN overnight gap is trading against the
+        # drift. Skip it when the gap is below the floor. The gap arrives via
+        # indicators["overnight_gap_pct"] (regime symbol, QQQ); if it is missing
+        # the gate is inert so a data gap can never block every trade.
+        if self.sc.orb_require_overnight_alignment:
+            overnight_gap = indicators.get("overnight_gap_pct")
+            if overnight_gap is not None and overnight_gap < self.sc.orb_overnight_gap_min_pct:
+                return None
+
         stop_loss = range_low
         risk = entry_price - stop_loss
         if risk <= 0:

@@ -89,6 +89,31 @@ class StrategyConfig:
     # bearish). Default off — kept inert until validated out-of-sample.
     orb_require_regime_alignment: bool = False
 
+    # Optional: align ORB long entries with the overnight drift. The Nasdaq's
+    # return accrues mostly overnight (close->open); the intraday session ORB
+    # trades in is the weaker leg (QQQ 2010-2026 backtest: overnight Sharpe
+    # ~0.75 vs intraday ~0.27 — see research/overnight_drift_backtest.py). This
+    # gate skips an ORB long on days the market gapped DOWN overnight, i.e. when
+    # the overnight drift ran against the trade. The signal is the regime
+    # symbol's (QQQ) prior-close -> today-open move, supplied to the strategy as
+    # indicators["overnight_gap_pct"]. If that value is absent the gate is INERT
+    # (fails open) so a missing-data day never silently blocks every trade.
+    # Default OFF — a testable hypothesis; validate out-of-sample before use.
+    # This is the momentum-alignment direction; the mean-reversion variant
+    # (fade a down gap) is its inverse and would gate on a maximum gap instead.
+    orb_require_overnight_alignment: bool = False
+    orb_overnight_gap_min_pct: float = 0.0  # min overnight gap % to allow a long
+
+    # Optional: instead of flattening at the close, carry a WINNING ORB position
+    # (in profit at the close) past the close and exit it at the NEXT session's
+    # open, capturing the overnight drift (the index's strongest leg — see
+    # research/overnight_drift_backtest.py). Losers and non-ORB positions still
+    # flatten at EOD. This adds real overnight gap risk: a bad open fills at the
+    # open, not the stop. Default OFF — validate against the exit-at-close
+    # baseline and buy&hold QQQ before enabling. Backtester support only for now;
+    # the live engine still flattens EOD until this is wired and validated there.
+    orb_hold_overnight: bool = False
+
     # VWAP Reversion
     vwap_enabled: bool = True
     vwap_deviation_pct: float = 0.5

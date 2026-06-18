@@ -304,3 +304,77 @@ def test_force_close_at_eod_minutes_before_close():
     assert trades[0].exit_reason == "eod_close"
     # Flattened at the 15:56 bar (72), not carried to the 15:59 bar (80).
     assert trades[0].exit_price < 73.0
+
+
+# --------------------------------------------------------------------------
+# Overnight-hold: carry a WINNING ORB position past the close, exit next open
+# --------------------------------------------------------------------------
+
+def _run_days(days, strategies, config, capital=100_000.0, regime="bullish"):
+    """Drive _simulate_day across consecutive days, carrying open_positions the
+    way run() does, so cross-day overnight holds can be exercised offline."""
+    bt = Backtester(config)
+    risk = RiskManager(config.risk)
+    open_positions = {}
+    out = []
+    for day_bars in days:
+        if isinstance(day_bars, list):
+            day_bars = {"TQQQ": day_bars}
+        risk.reset_daily(capital)
+        for s in strategies:
+            s.reset_daily()
+            s.set_market_regime(regime)
+        capital, trades = bt._simulate_day(day_bars, strategies, risk, capital, open_positions)
+        out.append((capital, trades))
+    return out, open_positions
+
+
+_ORB_ENTRY = [(70.5, 70.6, 70.5, 70.7)]
+# Drifts up after entry; never hits the 78.7 target or 69.9 stop, in profit at close.
+_DRIFT_UP = [(70.7 + 0.02 * i, 70.8 + 0.02 * i, 70.6 + 0.02 * i, 70.75 + 0.02 * i)
+             for i in range(25)]
+
+
+def test_overnight_hold_carries_winner_to_next_open():
+    cfg = Config()
+    cfg.strategy.orb_hold_overnight = True
+    day1 = utc_minute_bars("2025-01-15", 14, 30, BULL_RANGE + _ORB_ENTRY + _DRIFT_UP)
+    day2 = utc_minute_bars("2025-01-16", 14, 30, [(72.0, 72.1, 71.9, 72.0)] * 6)
+
+    out, open_positions = _run_days([day1, day2], [ORBStrategy(cfg)], cfg)
+    (_, t1), (cap2, t2) = out
+
+    # Day 1: the winner is carried, nothing booked.
+    assert t1 == []
+    # Day 2: it exits at the open, capturing the overnight move.
+    assert len(t2) == 1
+    assert t2[0].exit_reason == "overnight_exit"
+    assert t2[0].pnl > 0 and cap2 > 100_000.0
+    assert open_positions == {}        # nothing left dangling
+
+
+def test_overnight_hold_does_not_carry_a_loser():
+    cfg = Config()
+    cfg.strategy.orb_hold_overnight = True
+    # Drifts DOWN after entry (never hits the 69.9 stop) -> loser at the close,
+    # so it must flatten EOD rather than carry.
+    fade = [(70.7 - 0.01 * i, 70.75 - 0.01 * i, 70.55 - 0.01 * i, 70.6 - 0.01 * i)
+            for i in range(25)]
+    day1 = utc_minute_bars("2025-01-15", 14, 30, BULL_RANGE + _ORB_ENTRY + fade)
+
+    out, open_positions = _run_days([day1], [ORBStrategy(cfg)], cfg)
+    (_, t1), = out
+    assert len(t1) == 1
+    assert t1[0].exit_reason == "eod_close"
+    assert open_positions == {}
+
+
+def test_overnight_hold_off_flattens_at_close():
+    # Same winning day with the flag OFF (default): must flatten at the close.
+    cfg = Config()
+    day1 = utc_minute_bars("2025-01-15", 14, 30, BULL_RANGE + _ORB_ENTRY + _DRIFT_UP)
+    out, open_positions = _run_days([day1], [ORBStrategy(cfg)], cfg)
+    (_, t1), = out
+    assert len(t1) == 1
+    assert t1[0].exit_reason == "eod_close"
+    assert open_positions == {}

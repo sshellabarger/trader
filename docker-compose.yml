@@ -1,0 +1,18 @@
+# 24/7 trader service. `restart: always` keeps it running across crashes and
+# host reboots. Secrets come from .env (gitignored, never baked into the image).
+services:
+  trader:
+    build: .
+    image: trader:latest
+    container_name: trader
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      # Persist the trade journal across restarts/redeploys.
+      - ./trade_logs:/app/trade_logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

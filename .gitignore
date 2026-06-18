@@ -1,5 +1,11 @@
 .env
-.old
 .DS_Store
 __pycache__/
 *.pyc
+*.old
+.claude/
+*.log
+trade_logs/
+backtest_results/
+venv/
+.venv/

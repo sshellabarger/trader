@@ -219,6 +219,12 @@ class Engine:
                         f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
 
             indicators = compute_indicators(bars)
+            # NOTE: the optional ORB overnight-alignment gate reads
+            # indicators["overnight_gap_pct"]. The backtester populates it from
+            # the regime symbol's prior-close -> today-open. To use the gate
+            # LIVE, fetch the prior daily close here (the session bars start at
+            # 09:30 so it isn't in `bars`) and set the key. Left unset for now,
+            # which keeps the gate inert live; it is OFF by default regardless.
 
             candidate = Candidate(
                 symbol=sym,

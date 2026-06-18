@@ -1,0 +1,23 @@
+# Optional: run the trader 24/7 on a plain Linux VM WITHOUT Docker.
+# (Docker via docker-compose is the recommended path — see DEPLOY.md.)
+#
+# Assumes you cloned the repo to /opt/trader (so the package files live in
+# /opt/trader) and made a venv at /opt/venv with `requests` installed, plus an
+# /opt/trader/.env holding the Alpaca keys. `python -m trader` is run from /opt,
+# the parent of the package directory.
+[Unit]
+Description=Trader (Alpaca day-trading bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt
+EnvironmentFile=/opt/trader/.env
+ExecStart=/opt/venv/bin/python -m trader run --interval 30
+Restart=always
+RestartSec=10
+User=trader
+
+[Install]
+WantedBy=multi-user.target

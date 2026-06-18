@@ -262,3 +262,59 @@ def test_naive_timestamps_fail_closed():
     # No timezone info -> the strategy must not guess; produce no signal.
     bars = [make_bar("2025-01-15 14:3%d:00" % i, 70.0, 70.6, 69.9, 70.5) for i in range(6)]
     assert make_strategy().evaluate(make_candidate(bars), bars, {}) is None
+
+
+# --- Overnight-drift alignment gate (default OFF) ---------------------------
+
+def _bull_bars():
+    return build_bars(WINTER, BULL_RANGE + [BULL_ENTRY])
+
+
+def test_overnight_alignment_off_by_default_ignores_gap():
+    # Flag off (default): even a large DOWN overnight gap is ignored.
+    bars = _bull_bars()
+    sig = make_strategy().evaluate(
+        make_candidate(bars), bars, {"overnight_gap_pct": -5.0}
+    )
+    assert sig is not None and sig.direction == SignalDirection.LONG
+
+
+def test_overnight_alignment_blocks_down_gap_when_enabled():
+    bars = _bull_bars()
+    # Down overnight gap -> the long fights the drift -> blocked.
+    blocked = make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars), bars, {"overnight_gap_pct": -0.4}
+    )
+    assert blocked is None
+    # Up overnight gap -> aligned with the drift -> allowed.
+    ok = make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars), bars, {"overnight_gap_pct": 0.4}
+    )
+    assert ok is not None and ok.direction == SignalDirection.LONG
+
+
+def test_overnight_alignment_inert_when_gap_missing():
+    # Enabled but no overnight_gap_pct supplied -> fail open (still trades), so
+    # a missing-data day never silently blocks every entry.
+    bars = _bull_bars()
+    assert make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars), bars, {}
+    ) is not None
+    # Explicit None behaves the same as absent.
+    assert make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars), bars, {"overnight_gap_pct": None}
+    ) is not None
+
+
+def test_overnight_gap_min_pct_threshold():
+    bars = _bull_bars()
+    # Require at least +0.3% overnight gap to take the long.
+    below = make_strategy(
+        orb_require_overnight_alignment=True, orb_overnight_gap_min_pct=0.3
+    ).evaluate(make_candidate(bars), bars, {"overnight_gap_pct": 0.2})
+    assert below is None
+    # Boundary: gap exactly at the floor is allowed (block only when strictly below).
+    at = make_strategy(
+        orb_require_overnight_alignment=True, orb_overnight_gap_min_pct=0.3
+    ).evaluate(make_candidate(bars), bars, {"overnight_gap_pct": 0.3})
+    assert at is not None
