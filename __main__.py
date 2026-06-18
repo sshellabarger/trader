@@ -47,6 +47,13 @@ def cmd_run(args):
 def cmd_backtest(args):
     config = Config()
     config.log_level = args.log_level
+    # Optional overnight experiments (default off = baseline behavior).
+    if args.overnight_filter:
+        config.strategy.orb_require_overnight_alignment = True
+    if args.overnight_gap_min is not None:
+        config.strategy.orb_overnight_gap_min_pct = args.overnight_gap_min
+    if args.hold_overnight:
+        config.strategy.orb_hold_overnight = True
     setup_logging(config.log_level)
 
     # Default to the exact instruments the live engine trades (e.g. TQQQ+SQQQ
@@ -57,6 +64,8 @@ def cmd_backtest(args):
 
     print(f"\n{'='*50}")
     print(f"BACKTEST: {'+'.join(symbols)} {args.start} -> {args.end}")
+    print(f"  Overnight filter: {'ON' if config.strategy.orb_require_overnight_alignment else 'off'}"
+          f"   |   Hold overnight: {'ON' if config.strategy.orb_hold_overnight else 'off'}")
     print(f"  Return: {result.total_return_pct:+.2f}%  (${result.total_pnl:+,.2f})")
     print(f"  Capital: ${result.initial_capital:,.0f} -> ${result.final_capital:,.2f}")
     print(f"  Trades: {result.total_trades}  Win rate: {result.win_rate:.1f}%")
@@ -115,6 +124,12 @@ def main():
     bt_p.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
     bt_p.add_argument("--end", required=True, help="End date YYYY-MM-DD")
     bt_p.add_argument("--symbol", type=str, default="", help="Symbol to test")
+    bt_p.add_argument("--overnight-filter", action="store_true",
+                      help="enable the ORB overnight-alignment entry gate")
+    bt_p.add_argument("--overnight-gap-min", type=float, default=None,
+                      help="min overnight gap %% for the filter (default 0.0)")
+    bt_p.add_argument("--hold-overnight", action="store_true",
+                      help="carry winning ORB positions overnight, exit next open")
 
     wf_p = sub.add_parser("walkforward", help="Walk-forward validation")
     wf_p.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
