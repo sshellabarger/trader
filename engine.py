@@ -161,12 +161,36 @@ class Engine:
 
     def _new_day(self, today: str):
         if self._today is not None:
-            self.journal.save_daily_csv()
-            self.journal.save_daily_summary()
-            summary = self.journal.daily_summary()
-            logger.info(f"Day ended — {summary}")
+            # Persist the prior day's journal. A failure here (disk full, a
+            # permissions problem, etc.) must never stop the day from rolling
+            # over or halt trading, so it is contained and logged rather than
+            # raised. Previously an exception here left self._today unchanged,
+            # so every subsequent tick re-entered _new_day, re-raised, and the
+            # bot stopped trading entirely until the process was restarted.
+            try:
+                self.journal.save_daily_csv()
+                self.journal.save_daily_summary()
+                summary = self.journal.daily_summary()
+                logger.info(f"Day ended — {summary}")
+            except Exception as exc:
+                logger.error(
+                    f"Failed to persist journal for {self._today}: {exc}",
+                    exc_info=True,
+                )
 
         self._today = today
+
+        # Roll the journal to the new day now, before the fallible broker/regime
+        # setup below. The journal is rolled by re-instantiation; if it stayed at
+        # the end of this method and a call below raised, the day would already
+        # be advanced but the journal would still point at the previous day, so
+        # the next day's trades would be appended to the previous day's file.
+        # Carry any still-open position across the boundary so a live trade is
+        # never dropped from the book.
+        prev_open = self.journal.open_trades
+        self.journal = TradeJournal()
+        self.journal.open_trades = prev_open
+
         self._bars_cache.clear()
         self._indicators_cache.clear()
         self._flatten_requested = False
@@ -226,7 +250,6 @@ class Engine:
                 s.reset_daily()
                 s.set_market_regime("unknown")
 
-        self.journal = TradeJournal()
         logger.info(f"New trading day: {today}")
 
     def _generate_signals(self) -> List[Signal]:
