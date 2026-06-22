@@ -320,6 +320,33 @@ def test_overnight_gap_min_pct_threshold():
     assert at is not None
 
 
+def test_overnight_alignment_bear_leg_wants_down_gap():
+    # SQQQ is long-only on its OWN bullish opening range; the overnight gate
+    # aligns it with a DOWN index gap (SQQQ rises when the Nasdaq falls), so it
+    # trades on down-gap days rather than being blocked like the bull leg.
+    bars = _bull_bars()
+    ok = make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars, symbol="SQQQ"), bars, {"overnight_gap_pct": -0.4}
+    )
+    assert ok is not None and ok.direction == SignalDirection.LONG
+    # Up index gap -> the bear long would fight the drift -> blocked.
+    blocked = make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars, symbol="SQQQ"), bars, {"overnight_gap_pct": 0.4}
+    )
+    assert blocked is None
+
+
+def test_overnight_alignment_is_symbol_aware():
+    # The SAME up gap allows the bull leg but blocks the bear leg -> the gate is
+    # symbol-aware, not one global switch that gates both the same way.
+    bars = _bull_bars()
+    up = {"overnight_gap_pct": 0.5}
+    assert make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars, "TQQQ"), bars, up) is not None
+    assert make_strategy(orb_require_overnight_alignment=True).evaluate(
+        make_candidate(bars, "SQQQ"), bars, up) is None
+
+
 def test_env_toggles_overnight_filter():
     # The deployed bot enables the filter via .env (ORB_REQUIRE_OVERNIGHT_ALIGNMENT).
     import os

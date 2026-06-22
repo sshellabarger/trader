@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 
 
+def _bar_time_et(bar: Dict) -> Optional[datetime]:
+    """Parse a bar's UTC timestamp into an ET-aware datetime, or None if unusable."""
+    t = bar.get("t", "")
+    if not isinstance(t, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return None
+    return dt.astimezone(_ET)
+
+
 class Engine:
     """ETF-focused trading engine."""
 
@@ -64,9 +78,13 @@ class Engine:
         # symbol → UTC ISO time the entry was submitted; bounds exit-fill lookups
         # so a stale prior-session fill can't be booked as this trade's exit.
         self._entry_time_utc: Dict[str, str] = {}
-        # Today's overnight gap (regime symbol close->open), for the optional ORB
-        # overnight-alignment filter. Recomputed each day in _new_day.
+        # Today's overnight gap (regime symbol prior close -> premarket), for the
+        # optional ORB overnight-alignment filter. Computed lazily once the
+        # session is under way (see _ensure_overnight_gap) and cached for the day.
         self._overnight_gap_pct: Optional[float] = None
+        # Prior regular-session close of the regime symbol (QQQ), captured in
+        # _new_day; the premarket gap above is measured against it.
+        self._prev_regular_close: Optional[float] = None
 
     def run(self, loop_interval: int = 30):
         logger.info("=" * 60)
@@ -201,11 +219,12 @@ class Engine:
         if equity > 0:
             self.risk.reset_daily(equity)
 
-        # Overnight gap (regime symbol's prior close -> today's open), same
-        # definition the backtester uses. Computed once per day and injected into
-        # indicators in _generate_signals. Fail-open: stays None if it can't be
-        # computed, which leaves the ORB overnight filter inert for the day.
+        # Overnight gap is computed from QQQ PREMARKET data once the session is
+        # under way (see _ensure_overnight_gap), not here: _new_day runs at the
+        # date rollover, before today's premarket/open exists. Here we only reset
+        # it and capture the prior regular-session close it is measured against.
         self._overnight_gap_pct = None
+        self._prev_regular_close = None
 
         # Detect regime
         try:
@@ -227,23 +246,20 @@ class Engine:
             else:
                 logger.info(f"Regime: {regime}")
 
-            # Overnight gap from the same daily bars (no extra API call).
-            if spy_bars and len(spy_bars) >= 2:
-                last_bar = spy_bars[-1]
-                if str(last_bar.get("t", ""))[:10] == today:
-                    prior_close = float(spy_bars[-2].get("c", 0) or 0)
-                    today_open = float(last_bar.get("o", 0) or 0)
-                    if prior_close > 0 and today_open > 0:
-                        self._overnight_gap_pct = (today_open - prior_close) / prior_close * 100.0
+            # Prior regular-session close = the most recent COMPLETED daily bar
+            # (strictly before today; today's daily bar usually doesn't exist yet
+            # when _new_day runs). The premarket gap is measured against this.
+            if spy_bars:
+                prior = [b for b in spy_bars if str(b.get("t", ""))[:10] < today]
+                base = prior[-1] if prior else spy_bars[-1]
+                pc = float(base.get("c", 0) or 0)
+                if pc > 0:
+                    self._prev_regular_close = pc
             if self.config.strategy.orb_require_overnight_alignment:
-                if self._overnight_gap_pct is None:
-                    logger.info("Overnight filter ON but gap unavailable — gate inert today")
-                else:
-                    allowed = self._overnight_gap_pct >= self.config.strategy.orb_overnight_gap_min_pct
-                    logger.info(
-                        f"Overnight gap ({self.primary}): {self._overnight_gap_pct:+.2f}%  ->  "
-                        f"ORB longs {'ALLOWED' if allowed else 'BLOCKED'} today"
-                    )
+                logger.info(
+                    f"Overnight filter ON — premarket gap computed at the open "
+                    f"(prior {self.primary} close={self._prev_regular_close or 'n/a'})"
+                )
         except Exception as exc:
             logger.warning(f"Regime detection failed: {exc}")
             for s in self.strategies:
@@ -252,8 +268,70 @@ class Engine:
 
         logger.info(f"New trading day: {today}")
 
+    def _ensure_overnight_gap(self):
+        """Compute today's QQQ overnight gap once and cache it for the day.
+
+        gap% = (premarket price - prior regular close) / prior close * 100,
+        where the premarket price is QQQ's last extended-hours print before the
+        09:30 open (falling back to today's official open if the IEX premarket is
+        empty). Measured against self._prev_regular_close (set in _new_day).
+
+        Called from _generate_signals (market open), so the prior close and the
+        premarket session are both known. Fail-open: leaves the gap None if it
+        can't be computed, so the ORB overnight gate goes inert rather than
+        blocking every entry.
+        """
+        if self._overnight_gap_pct is not None:
+            return
+        prior_close = self._prev_regular_close
+        if not prior_close or prior_close <= 0:
+            return
+
+        now = datetime.now(_ET)
+        open_dt = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        premarket_open = now.replace(hour=4, minute=0, second=0, microsecond=0)
+        try:
+            bars = self.broker.get_bars(
+                self.primary, timeframe="1Min",
+                start=premarket_open.isoformat(), end=now.isoformat(),
+                limit=400,
+            )
+        except Exception as exc:
+            logger.warning(f"Premarket gap fetch failed: {exc}")
+            return
+        if not bars:
+            return
+
+        # Last premarket print before the bell; if the (thin) IEX premarket has
+        # none, fall back to today's first regular-session open.
+        pm_price = None
+        premarket = [
+            b for b in bars
+            if (bt := _bar_time_et(b)) is not None and bt < open_dt
+        ]
+        if premarket:
+            pm_price = float(premarket[-1].get("c", 0) or 0)
+        else:
+            regular = [
+                b for b in bars
+                if (bt := _bar_time_et(b)) is not None and bt >= open_dt
+            ]
+            if regular:
+                pm_price = float(regular[0].get("o", 0) or 0)
+
+        if pm_price and pm_price > 0:
+            self._overnight_gap_pct = (pm_price - prior_close) / prior_close * 100.0
+            if self.config.strategy.orb_require_overnight_alignment:
+                logger.info(
+                    f"Premarket gap ({self.primary}): {self._overnight_gap_pct:+.2f}% "
+                    f"(prior close {prior_close:.2f} -> premarket {pm_price:.2f})"
+                )
+
     def _generate_signals(self) -> List[Signal]:
         signals: List[Signal] = []
+        # Premarket QQQ gap (cached per day) so the ORB overnight gate has a
+        # value once the session is under way.
+        self._ensure_overnight_gap()
         broker_positions = self.broker.get_positions()
         position_map = {p["symbol"]: p for p in broker_positions}
 

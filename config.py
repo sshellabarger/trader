@@ -68,7 +68,12 @@ class StrategyConfig:
     # Re-enable ONLY behind regime alignment (orb_require_regime_alignment) so
     # the bear leg trades exclusively in confirmed bearish regimes, and only
     # once that combination is validated out-of-sample on fresh data.
-    orb_trade_both_directions: bool = False  # include leveraged_bear in the trading set
+    #
+    # 2026-06-21: ENABLED at user request to trade the SQQQ long leg. The
+    # 2026-06-13 negative-expectancy finding above still stands and was NOT
+    # invalidated — validate on a fresh backtest before live use, and consider
+    # pairing with orb_require_regime_alignment=True.
+    orb_trade_both_directions: bool = True  # include leveraged_bear in the trading set
     orb_entry_window_minutes: int = 3  # how long after the range completes an entry is allowed
     orb_min_range_bars: int = 3  # require this many 1-min bars inside the opening range
     orb_profit_target_r: float = 10.0

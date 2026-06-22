@@ -464,22 +464,84 @@ def test_last_filled_exit_ignores_stale_fill_before_entry(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Trading-symbol set — the bear (SQQQ) leg is OFF by default (2026-06-13
-# diagnosis: SQQQ ORB had negative expectancy in every coherent slice; the
-# TQQQ-only profile was +29%/PF 1.64/Sharpe 2.75). It must stay re-enableable.
+# Trading-symbol set — the bear (SQQQ) leg is ON by default as of 2026-06-21
+# (enabled at user request). The 2026-06-13 diagnosis that it had negative
+# expectancy (TQQQ-only profile was +29%/PF 1.64/Sharpe 2.75) still stands and
+# was not invalidated, so the toggle must keep working in both directions.
 # --------------------------------------------------------------------------
 
-def test_default_trading_symbols_are_tqqq_only():
+def test_default_trading_symbols_include_bear_leg():
     cfg = Config()
-    assert cfg.get_trading_symbols() == ["TQQQ"]   # bear leg off by default
+    assert cfg.get_trading_symbols() == ["TQQQ", "SQQQ"]   # bear leg on by default
 
 
-def test_bear_leg_reenables_when_both_directions_on():
+def test_bear_leg_can_be_disabled():
     cfg = Config()
-    cfg.strategy.orb_trade_both_directions = True
-    assert cfg.get_trading_symbols() == ["TQQQ", "SQQQ"]
+    cfg.strategy.orb_trade_both_directions = False
+    assert cfg.get_trading_symbols() == ["TQQQ"]
 
 
-def test_engine_trades_tqqq_only_by_default():
+def test_engine_trades_both_legs_by_default():
     engine = make_engine(_broker())
-    assert engine.symbols == ["TQQQ"]
+    assert engine.symbols == ["TQQQ", "SQQQ"]
+
+
+# --------------------------------------------------------------------------
+# Premarket-QQQ overnight gap (feeds the ORB overnight-alignment gate).
+# --------------------------------------------------------------------------
+
+def test_ensure_overnight_gap_uses_premarket(monkeypatch):
+    # QQQ premarket prints at 08:00 & 09:00 ET (13:00 & 14:00 UTC in winter);
+    # last premarket close 101.0 vs prior close 100.0 -> +1.0% gap.
+    pm = [
+        bar("2025-01-15T13:00:00Z", 100.4, 100.6, 100.3, 100.5),
+        bar("2025-01-15T14:00:00Z", 100.9, 101.1, 100.8, 101.0),
+    ]
+    broker = FakeBroker(bars_by_symbol={"QQQ": pm})
+    engine = make_engine(broker)
+    engine._prev_regular_close = 100.0
+
+    class FrozenOpen(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2025, 1, 15, 9, 40, tzinfo=tz)  # 09:40 ET, session under way
+
+    monkeypatch.setattr("trader.engine.datetime", FrozenOpen)
+    engine._ensure_overnight_gap()
+    assert engine._overnight_gap_pct is not None
+    assert abs(engine._overnight_gap_pct - 1.0) < 1e-9
+
+    # Cached for the day: a second call does not recompute even if data changes.
+    broker.bars_by_symbol["QQQ"] = []
+    engine._ensure_overnight_gap()
+    assert abs(engine._overnight_gap_pct - 1.0) < 1e-9
+
+
+def test_ensure_overnight_gap_falls_back_to_open(monkeypatch):
+    # Thin IEX premarket (no pre-09:30 prints): use today's first regular open.
+    # Open 102.0 vs prior close 100.0 -> +2.0% gap.
+    regular = [
+        bar("2025-01-15T14:30:00Z", 102.0, 102.2, 101.9, 102.1),  # 09:30 ET open
+        bar("2025-01-15T14:31:00Z", 102.1, 102.3, 102.0, 102.2),
+    ]
+    broker = FakeBroker(bars_by_symbol={"QQQ": regular})
+    engine = make_engine(broker)
+    engine._prev_regular_close = 100.0
+
+    class FrozenOpen(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2025, 1, 15, 9, 40, tzinfo=tz)
+
+    monkeypatch.setattr("trader.engine.datetime", FrozenOpen)
+    engine._ensure_overnight_gap()
+    assert abs(engine._overnight_gap_pct - 2.0) < 1e-9
+
+
+def test_ensure_overnight_gap_failopen_without_prior_close():
+    # No prior close captured -> gap stays None (gate inert), never crashes.
+    broker = FakeBroker(bars_by_symbol={"QQQ": []})
+    engine = make_engine(broker)
+    engine._prev_regular_close = None
+    engine._ensure_overnight_gap()
+    assert engine._overnight_gap_pct is None
