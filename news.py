@@ -76,11 +76,13 @@ class NewsArticle:
 # Fetch (historical-capable: the same call serves live and backtest)
 # ---------------------------------------------------------------------------
 
-def _parse_news_items(items: List[Dict], requested: Sequence[str]) -> List[NewsArticle]:
-    """Pure parser for Alpaca news payload items → one NewsArticle per requested
-    symbol an item is tagged with. Separated from the HTTP call so it is unit
-    testable without network."""
-    want = {s.upper() for s in requested}
+def _parse_news_items(items: List[Dict],
+                      requested: Optional[Sequence[str]] = None) -> List[NewsArticle]:
+    """Pure parser for Alpaca news payload items → one NewsArticle per tagged
+    symbol. With `requested` set, keep only those symbols (per-name fetch); with
+    requested=None keep EVERY tagged symbol (market-wide catalyst sourcing).
+    Separated from the HTTP call so it is unit testable without network."""
+    want = {s.upper() for s in requested} if requested else None
     out: List[NewsArticle] = []
     for it in items or []:
         headline = it.get("headline") or it.get("title") or ""
@@ -89,13 +91,14 @@ def _parse_news_items(items: List[Dict], requested: Sequence[str]) -> List[NewsA
         url = it.get("url") or ""
         published = it.get("created_at") or it.get("updated_at") or ""
         for sym in (it.get("symbols") or []):
-            if sym.upper() in want:
-                out.append(NewsArticle(sym.upper(), headline, summary, source, url, published))
+            su = sym.upper()
+            if want is None or su in want:
+                out.append(NewsArticle(su, headline, summary, source, url, published))
     return out
 
 
 def fetch_alpaca_news(
-    symbols: Sequence[str],
+    symbols: Optional[Sequence[str]],
     start,
     end,
     *,
@@ -104,12 +107,14 @@ def fetch_alpaca_news(
     limit: int = 50,
     max_pages: int = 100,
     session: Optional[requests.Session] = None,
+    sort: str = "asc",
 ) -> List[NewsArticle]:
-    """Fetch articles for `symbols` between `start` and `end` (ISO strings or
-    datetimes). Reuses the Alpaca keys you already have. Paginates via
-    next_page_token. Returns UNscored articles; call score_articles() after."""
-    if not symbols:
-        return []
+    """Fetch articles between `start` and `end` (ISO strings or datetimes).
+    Pass a `symbols` list for a per-name fetch, or None/[] for MARKET-WIDE news
+    (catalyst sourcing — every tagged symbol is returned). `sort="desc"` returns
+    newest-first, so a page cap keeps the most recent articles. Reuses the
+    Alpaca keys you already have; paginates via next_page_token. Returns UNscored
+    articles; call score_articles() after."""
     sess = session or requests.Session()
     headers = {
         "Apca-Api-Key-Id": api_key,
@@ -120,12 +125,13 @@ def fetch_alpaca_news(
     page_token: Optional[str] = None
     for _ in range(max_pages):
         params = {
-            "symbols": ",".join(s.upper() for s in symbols),
             "start": _iso(start),
             "end": _iso(end),
             "limit": limit,
-            "sort": "asc",
+            "sort": sort,
         }
+        if symbols:
+            params["symbols"] = ",".join(s.upper() for s in symbols)
         if page_token:
             params["page_token"] = page_token
         try:
@@ -247,6 +253,73 @@ def allow_entry(
     if (not bullish) and mean >= -block_below:
         return False, f"news: blocked short, sentiment {mean:+.2f} over {count}"
     return True, f"news: ok (sentiment {mean:+.2f}, n={count})"
+
+
+# ---------------------------------------------------------------------------
+# Catalyst sourcing (which names have a fresh news burst today)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CatalystScore:
+    symbol: str
+    count: int                       # articles in the window
+    latest: str                      # ISO of the most recent article
+    mean_sentiment: Optional[float]  # mean polarity (None if unscored)
+    score: float                     # volume + recency, higher = stronger
+
+
+def rank_catalysts(
+    articles: List[NewsArticle], as_of, *,
+    window_min: int = 1080, min_articles: int = 2,
+) -> List["CatalystScore"]:
+    """Tally per-symbol news in (as_of - window, as_of], score each by volume
+    plus a recency bonus, and return CatalystScores best-first. Pure (no
+    network). Use the symbols of the top results as the day's catalyst hot-list.
+    """
+    now = _to_dt(as_of)
+    if now is None:
+        return []
+    lo = now - timedelta(minutes=window_min)
+    span = (now - lo).total_seconds() or 1.0
+    by_sym: Dict[str, List[NewsArticle]] = {}
+    for a in articles:
+        pdt = a.published_dt
+        if pdt is None or not (lo < pdt <= now):
+            continue
+        by_sym.setdefault(a.symbol, []).append(a)
+
+    out: List[CatalystScore] = []
+    for sym, arts in by_sym.items():
+        if len(arts) < min_articles:
+            continue
+        latest = max(a.published_dt for a in arts)
+        recency = (latest - lo).total_seconds() / span      # 0..1 (newer -> 1)
+        scored = [a.sentiment_score for a in arts if a.sentiment_score is not None]
+        mean = sum(scored) / len(scored) if scored else None
+        out.append(CatalystScore(sym, len(arts), latest.isoformat(), mean,
+                                  round(len(arts) + recency, 3)))
+    out.sort(key=lambda c: (c.score, c.latest), reverse=True)
+    return out
+
+
+def hotlist_symbols(catalysts: Sequence["CatalystScore"], n: int) -> List[str]:
+    """Top-n catalyst symbols (the day's news hot-list)."""
+    return [c.symbol for c in catalysts[:n]]
+
+
+def allow_entry_long(
+    feed: NewsFeed, ts, symbol: str, *,
+    window_min: int = 120, block_below: float = -0.4, min_articles: int = 2,
+) -> Tuple[bool, str]:
+    """Long-only per-stock news gate: block a breakout long into strongly
+    negative recent news, allow when coverage is thin or sentiment is not clearly
+    bad. Returns (allow, reason). The stock-sleeve analogue of allow_entry."""
+    count, mean = feed.sentiment_as_of(ts, symbols=[symbol], window_min=window_min)
+    if mean is None or count < min_articles:
+        return True, f"news thin ({symbol} n={count})"
+    if mean <= block_below:
+        return False, f"news blocked {symbol} long: sentiment {mean:+.2f} over {count}"
+    return True, f"news ok {symbol} ({mean:+.2f}, n={count})"
 
 
 # ---------------------------------------------------------------------------

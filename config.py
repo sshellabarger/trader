@@ -219,6 +219,19 @@ class StrategyConfig:
     # sleeve raises this so several names can break out the same morning.
     orb_max_entries_per_day: int = 1
 
+    # ── Stock-sleeve news / catalysts (default OFF) ─────────────────────
+    # When on, each morning the sleeve pulls recent MARKET-WIDE news, adds the
+    # top catalyst names (most fresh coverage) to the scan pool, and gates
+    # breakout longs away from strongly-negative headlines. Off = no news calls.
+    stock_sleeve_news_enabled: bool = False
+    stock_sleeve_news_lookback_min: int = 1080    # hot-list window (~18h: overnight + premarket)
+    stock_sleeve_news_hotlist: int = 10           # catalyst names added to the pool
+    stock_sleeve_news_min_articles: int = 2       # min articles to count as a catalyst
+    stock_sleeve_news_max_pages: int = 40         # market-wide fetch page cap (50/page)
+    stock_sleeve_news_gate_window_min: int = 120  # lookback for the entry gate
+    stock_sleeve_news_block_below: float = -0.4   # block a long when mean sentiment <= this
+    stock_sleeve_news_gate_min_articles: int = 2  # min coverage before the gate acts
+
     def __post_init__(self):
         # Let the deployed bot toggle experiments and the stock sleeve from the
         # environment (.env) without a code change, mirroring how the broker
@@ -251,6 +264,24 @@ class StrategyConfig:
             "STOCK_SLEEVE_MAX_POSITION_PCT", self.stock_sleeve_max_position_pct)
         self.orb_max_entries_per_day = _env_int(
             "ORB_MAX_ENTRIES_PER_DAY", self.orb_max_entries_per_day)
+
+        # Stock-sleeve news layer (default off — see the field comments above).
+        self.stock_sleeve_news_enabled = _env_bool(
+            "STOCK_SLEEVE_NEWS_ENABLED", self.stock_sleeve_news_enabled)
+        self.stock_sleeve_news_lookback_min = _env_int(
+            "STOCK_SLEEVE_NEWS_LOOKBACK_MIN", self.stock_sleeve_news_lookback_min)
+        self.stock_sleeve_news_hotlist = _env_int(
+            "STOCK_SLEEVE_NEWS_HOTLIST", self.stock_sleeve_news_hotlist)
+        self.stock_sleeve_news_min_articles = _env_int(
+            "STOCK_SLEEVE_NEWS_MIN_ARTICLES", self.stock_sleeve_news_min_articles)
+        self.stock_sleeve_news_max_pages = _env_int(
+            "STOCK_SLEEVE_NEWS_MAX_PAGES", self.stock_sleeve_news_max_pages)
+        self.stock_sleeve_news_gate_window_min = _env_int(
+            "STOCK_SLEEVE_NEWS_GATE_WINDOW_MIN", self.stock_sleeve_news_gate_window_min)
+        self.stock_sleeve_news_block_below = _env_float(
+            "STOCK_SLEEVE_NEWS_BLOCK_BELOW", self.stock_sleeve_news_block_below)
+        self.stock_sleeve_news_gate_min_articles = _env_int(
+            "STOCK_SLEEVE_NEWS_GATE_MIN_ARTICLES", self.stock_sleeve_news_gate_min_articles)
 
 
 @dataclass

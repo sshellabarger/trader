@@ -91,6 +91,19 @@ schedule (e.g. a weekly cron entry on the droplet) to refresh automatically:
 0 18 * * 0 root cd /root/trader && docker compose run --rm trader python -m trader screen-universe --out data/pool.json >> /var/log/trader-pool.log 2>&1
 ```
 
+### News and catalysts (optional, default off)
+
+The sleeve can also lean on the day's news. With `STOCK_SLEEVE_NEWS_ENABLED=true`
+it pulls recent market-wide headlines from Alpaca's free news feed each morning,
+adds the names with the most fresh coverage to the scan pool (so today's
+catalyst movers get considered even if they aren't in the static pool), and
+skips breakout longs into strongly-negative headlines. It runs inside the bot
+(no separate job) and needs no extra keys. Tune with `STOCK_SLEEVE_NEWS_HOTLIST`
+(how many catalyst names to add), `STOCK_SLEEVE_NEWS_LOOKBACK_MIN` (how far back
+to scan), and `STOCK_SLEEVE_NEWS_BLOCK_BELOW` (the sentiment floor for the entry
+gate). Watch the `News catalysts: N articles -> hot-list [...]` log line to see
+the day's picks.
+
 ## Updating later
 
 ```bash

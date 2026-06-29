@@ -72,6 +72,10 @@ class Engine:
         # is repopulated daily.
         self.sleeve_enabled = config.strategy.stock_sleeve_enabled
         self._sleeve_scanned_day: Optional[str] = None
+        # Stock-sleeve news layer state (built once/day in _refresh_news).
+        self._news_day: Optional[str] = None
+        self._news_feed = None
+        self._news_hotlist: List[str] = []
         if self.sleeve_enabled:
             self.symbols = []
             self._apply_sleeve_risk()
@@ -201,6 +205,10 @@ class Engine:
             # evaluate() can't see: all signals are generated before any fill, so
             # without this a choppy open could enter both TQQQ and SQQQ at once.
             if strat is not None and not strat.can_open(signal.symbol):
+                continue
+            ok, why = self._news_gate(signal.symbol)
+            if not ok:
+                logger.info(f"News gate: skip {signal.symbol} ({why})")
                 continue
             self._execute_entry(signal)
 
@@ -395,6 +403,11 @@ class Engine:
         if self._sleeve_scanned_day == today:
             return
         universe = self.config.stock_sleeve_scan_universe()
+        if self.config.strategy.stock_sleeve_news_enabled:
+            self._refresh_news()
+            if self._news_hotlist:
+                universe = list(dict.fromkeys(list(universe) + self._news_hotlist))
+                logger.info(f"Stock sleeve: +{len(self._news_hotlist)} catalyst names from news")
         if not universe:
             logger.warning("Stock sleeve: empty scan universe; trading nothing today")
             self.symbols = []
@@ -415,6 +428,52 @@ class Engine:
             logger.info(f"Stock sleeve picks for {today}: {detail}")
         else:
             logger.info(f"Stock sleeve: no qualifying candidates for {today}")
+
+    def _refresh_news(self):
+        """Once per day, pull recent MARKET-WIDE news, build a point-in-time
+        NewsFeed, and compute the catalyst hot-list (names with the most fresh
+        coverage). Fail-open: on any error the feed/hot-list stay empty so the
+        sleeve simply runs without the news layer."""
+        today = date.today().isoformat()
+        if self._news_day == today:
+            return
+        self._news_day = today
+        sc = self.config.strategy
+        try:
+            from .news import (fetch_alpaca_news, score_articles, NewsFeed,
+                               rank_catalysts, hotlist_symbols)
+            now = datetime.now(timezone.utc)
+            start = now - timedelta(minutes=sc.stock_sleeve_news_lookback_min)
+            arts = score_articles(fetch_alpaca_news(
+                None, start, now,
+                api_key=self.broker.config.api_key,
+                api_secret=self.broker.config.api_secret,
+                sort="desc", max_pages=sc.stock_sleeve_news_max_pages,
+            ))
+            self._news_feed = NewsFeed(arts)
+            cats = rank_catalysts(arts, now,
+                                  window_min=sc.stock_sleeve_news_lookback_min,
+                                  min_articles=sc.stock_sleeve_news_min_articles)
+            self._news_hotlist = hotlist_symbols(cats, sc.stock_sleeve_news_hotlist)
+            logger.info(f"News catalysts: {len(arts)} articles -> hot-list {self._news_hotlist}")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"News refresh failed: {exc}", exc_info=True)
+            self._news_feed = None
+            self._news_hotlist = []
+
+    def _news_gate(self, symbol: str):
+        """News entry gate for sleeve longs — (allow, reason). No-op (fail-open)
+        when the news layer is off or the feed is unavailable."""
+        sc = self.config.strategy
+        if not (self.sleeve_enabled and sc.stock_sleeve_news_enabled) or self._news_feed is None:
+            return True, ""
+        from .news import allow_entry_long
+        return allow_entry_long(
+            self._news_feed, datetime.now(timezone.utc), symbol,
+            window_min=sc.stock_sleeve_news_gate_window_min,
+            block_below=sc.stock_sleeve_news_block_below,
+            min_articles=sc.stock_sleeve_news_gate_min_articles,
+        )
 
     def _generate_signals(self) -> List[Signal]:
         signals: List[Signal] = []
