@@ -1,10 +1,18 @@
 """
-Trading Engine — ETF-focused.
-No scanner needed. Trades QQQ/TQQQ directly with ORB + VWAP.
+Trading Engine.
+
+Default (index mode): trades the QQQ/TQQQ/SQQQ instruments directly with
+ORB + VWAP — no scanner needed.
+
+Optional stock sleeve (STOCK_SLEEVE_ENABLED): sets the index instruments aside
+and instead day-trades a basket of individual high-growth stocks picked each
+morning by the scanner, with the same long-only ORB breakout. Stocks-only,
+paper-intended, fully env-gated; off by default.
 """
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional
@@ -16,7 +24,7 @@ from .indicators import compute_indicators
 from .journal import TradeJournal
 from .regime import RegimeDetector
 from .risk import RiskManager, PositionInfo, SizeResult
-from .scanner import Candidate
+from .scanner import Candidate, scan_candidates
 from .strategies import BaseStrategy, Signal, SignalAction, SignalDirection
 from .strategies.orb import ORBStrategy
 from .strategies.vwap_reversion import VWAPReversionStrategy
@@ -49,9 +57,26 @@ class Engine:
         self.risk = RiskManager(config.risk)
         self.journal = TradeJournal()
 
-        # What we trade
-        self.symbols = config.get_trading_symbols()
+        # The index instruments. Regime and overnight-gap context stay keyed to
+        # the index even when the stock sleeve is what actually trades.
         self.primary = config.strategy.primary_symbol
+        self._index_symbols = {
+            config.strategy.primary_symbol,
+            config.strategy.leveraged_bull,
+            config.strategy.leveraged_bear,
+        }
+
+        # What we trade. Index mode (default): the configured index instruments.
+        # Stock-sleeve mode: nothing yet — the scanner picks the day's names each
+        # morning (see _ensure_sleeve_symbols), so self.symbols starts empty and
+        # is repopulated daily.
+        self.sleeve_enabled = config.strategy.stock_sleeve_enabled
+        self._sleeve_scanned_day: Optional[str] = None
+        if self.sleeve_enabled:
+            self.symbols = []
+            self._apply_sleeve_risk()
+        else:
+            self.symbols = config.get_trading_symbols()
 
         # Strategies
         self.strategies: List[BaseStrategy] = []
@@ -65,7 +90,11 @@ class Engine:
             ema_period=config.strategy.vwap_regime_ema_period
         )
 
-        logger.info(f"ETF Engine: trading {self.symbols}")
+        if self.sleeve_enabled:
+            logger.info("STOCK SLEEVE ON — stocks-only, scanner-driven "
+                        "(index legs disabled; picks chosen each morning)")
+        else:
+            logger.info(f"ETF Engine: trading {self.symbols}")
         logger.info(f"Strategies: {[s.name for s in self.strategies]}")
 
         # State
@@ -131,6 +160,10 @@ class Engine:
 
         if not self.broker.is_market_open():
             return
+
+        # Stock sleeve: choose today's names once the session is open.
+        if self.sleeve_enabled:
+            self._ensure_sleeve_symbols()
 
         # Clear bars cache so we get fresh data each tick
         self._bars_cache.clear()
@@ -327,11 +360,69 @@ class Engine:
                     f"(prior close {prior_close:.2f} -> premarket {pm_price:.2f})"
                 )
 
+    def _apply_sleeve_risk(self):
+        """In stocks-only sleeve mode the whole book IS the stock sleeve, so the
+        global risk caps become the sleeve caps. Apply the sleeve's position
+        count and per-name size caps, and widen the ORB per-day entry cap so
+        several names can break out the same morning. An explicit env override
+        (MAX_POSITIONS, MAX_POSITION_PCT, ORB_MAX_ENTRIES_PER_DAY,
+        MAX_DAILY_TRADES) always wins, so the operator keeps the final say."""
+        s = self.config.strategy
+        if os.getenv("MAX_POSITIONS") is None:
+            self.risk.config.max_positions = s.stock_sleeve_max_positions
+        if os.getenv("MAX_POSITION_PCT") is None:
+            self.risk.config.max_position_pct = s.stock_sleeve_max_position_pct
+        if os.getenv("ORB_MAX_ENTRIES_PER_DAY") is None:
+            s.orb_max_entries_per_day = max(
+                s.orb_max_entries_per_day, s.stock_sleeve_max_positions)
+        if os.getenv("MAX_DAILY_TRADES") is None:
+            self.risk.config.max_daily_trades = max(
+                self.risk.config.max_daily_trades, s.stock_sleeve_max_positions * 2)
+        logger.info(
+            "Stock sleeve risk: max_positions=%d, max_position_pct=%.0f%%, "
+            "orb_max_entries/day=%d, max_daily_trades=%d",
+            self.risk.config.max_positions, self.risk.config.max_position_pct,
+            s.orb_max_entries_per_day, self.risk.config.max_daily_trades,
+        )
+
+    def _ensure_sleeve_symbols(self):
+        """Pick the day's stocks once, by scanning the high-growth universe for
+        premarket gappers/movers. Runs after the open so snapshots carry today's
+        bars. Fail-safe: on any error the picks are left unscanned (retry next
+        tick) or empty, so a data hiccup makes the bot trade nothing rather than
+        crash."""
+        today = date.today().isoformat()
+        if self._sleeve_scanned_day == today:
+            return
+        universe = self.config.stock_sleeve_scan_universe()
+        if not universe:
+            logger.warning("Stock sleeve: empty scan universe; trading nothing today")
+            self.symbols = []
+            self._sleeve_scanned_day = today
+            return
+        try:
+            candidates = scan_candidates(self.broker, universe, self.config.scanner)
+        except Exception as exc:
+            logger.error(f"Stock sleeve scan failed: {exc}", exc_info=True)
+            return  # leave today unscanned so the next tick retries
+        picks = candidates[: self.config.strategy.stock_sleeve_max_candidates]
+        self.symbols = [c.symbol for c in picks]
+        self._sleeve_scanned_day = today
+        if picks:
+            detail = ", ".join(
+                f"{c.symbol}({c.gap_pct:+.1f}% rvol{c.relative_volume:.1f})"
+                for c in picks)
+            logger.info(f"Stock sleeve picks for {today}: {detail}")
+        else:
+            logger.info(f"Stock sleeve: no qualifying candidates for {today}")
+
     def _generate_signals(self) -> List[Signal]:
         signals: List[Signal] = []
         # Premarket QQQ gap (cached per day) so the ORB overnight gate has a
-        # value once the session is under way.
-        self._ensure_overnight_gap()
+        # value once the session is under way. The gate is an index-instrument
+        # feature; in stocks-only sleeve mode skip the QQQ fetch entirely.
+        if not self.sleeve_enabled:
+            self._ensure_overnight_gap()
         broker_positions = self.broker.get_positions()
         position_map = {p["symbol"]: p for p in broker_positions}
 
@@ -347,9 +438,13 @@ class Engine:
                         f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
 
             indicators = compute_indicators(bars)
-            # Supply the day's overnight gap (computed in _new_day) to the ORB
-            # overnight-alignment gate. None when unavailable -> gate inert.
-            indicators["overnight_gap_pct"] = self._overnight_gap_pct
+            # Supply the day's overnight gap to the ORB overnight-alignment gate,
+            # but ONLY for the index instruments the gap actually describes. For
+            # stock-sleeve names it stays None so the QQQ gate is inert
+            # (fail-open) and never blocks a stock on the index's overnight move.
+            indicators["overnight_gap_pct"] = (
+                self._overnight_gap_pct if sym in self._index_symbols else None
+            )
 
             candidate = Candidate(
                 symbol=sym,
@@ -517,7 +612,7 @@ class Engine:
         assuming the entry price (which would record $0 P&L)."""
         entry_side = "buy" if trade_record.direction == "long" else "sell"
         exit_price = trade_record.entry_price
-        reason = "external_close"
+        reason = "unverified_close"
 
         fill = None
         if not self.config.dry_run:
@@ -531,9 +626,23 @@ class Engine:
             exit_price = fill["price"]
             reason = fill["reason"]
         else:
+            # No confirmed broker fill for a position that has left the book. We
+            # must still book it, but the price is an ESTIMATE — surface it
+            # loudly and tag the reason so an unverified P&L is never silent.
+            # (The Apr–May runs booked these at entry price = $0 with no signal.)
             bars = self._get_bars(symbol)
             if bars:
                 exit_price = float(bars[-1]["c"])  # last known price beats entry price
+                reason = "estimated_close"
+                logger.warning(
+                    f"Reconcile {symbol}: no confirmed fill; booking ESTIMATED exit "
+                    f"at last bar {exit_price:.2f} (P&L approximate, not a real fill)"
+                )
+            else:
+                logger.warning(
+                    f"Reconcile {symbol}: no confirmed fill and no bars; booking at "
+                    f"entry {exit_price:.2f} → $0 P&L is UNVERIFIED"
+                )
 
         record = self.journal.close_trade(symbol, exit_price, reason)
         self.risk.clear_symbol(symbol)

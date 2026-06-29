@@ -26,11 +26,15 @@ def bars_from_closes(closes, v=10_000):
 
 # Gentle rise (small gains) then a sustained drop → oversold, below VWAP, near
 # the lower band. Small prior gains keep RSI from being propped up.
-OVERSOLD_CLOSES = (
+# STILL_FALLING_CLOSES ends on a fresh low (a falling knife). OVERSOLD_CLOSES
+# appends one stabilising tick so the down-move has paused — a valid reversion
+# entry under the entry-confirmation guard.
+STILL_FALLING_CLOSES = (
     [70.0 + 0.01 * i for i in range(25)]                      # 70.00 -> 70.24
     + [70.20, 70.05, 69.85, 69.60, 69.30, 69.00,
        68.70, 68.45, 68.25, 68.10, 68.00, 67.95]             # sharp decline
 )
+OVERSOLD_CLOSES = STILL_FALLING_CLOSES + [67.97]             # decline, then a pause
 
 
 def make_candidate(bars, symbol="TQQQ"):
@@ -80,6 +84,28 @@ def test_bearish_regime_blocks_entry():
     strat = make_strategy()
     strat.set_market_regime("bearish")           # don't catch falling knives
     assert strat.evaluate(make_candidate(bars), bars, ind) is None
+
+
+def test_still_falling_blocks_entry_in_bullish_regime():
+    # Same oversold setup, but price is still making fresh lows. The daily
+    # regime is bullish, so only the entry-confirmation guard can stop this
+    # falling-knife buy — the 2026-06-22 TQQQ failure mode.
+    bars = bars_from_closes(STILL_FALLING_CLOSES)
+    ind = compute_indicators(bars)
+    strat = make_strategy()
+    strat.set_market_regime("bullish")
+    assert strat.evaluate(make_candidate(bars), bars, ind) is None
+
+
+def test_entry_confirmation_can_be_disabled():
+    # With the guard off, the still-falling setup enters again — confirming the
+    # guard is the only thing blocking it, not the oversold conditions.
+    bars = bars_from_closes(STILL_FALLING_CLOSES)
+    ind = compute_indicators(bars)
+    strat = make_strategy()
+    strat.sc.vwap_require_entry_confirmation = False
+    strat.set_market_regime("bullish")
+    assert strat.evaluate(make_candidate(bars), bars, ind) is not None
 
 
 def test_exit_when_price_reverts_to_vwap():

@@ -70,6 +70,13 @@ class VWAPReversionStrategy(BaseStrategy):
         if self.sc.vwap_require_bullish_regime and self._market_regime == "bearish":
             return None
 
+        # Falling-knife guard: the daily regime can be bullish while THIS
+        # instrument is still selling off intraday (the 2026-06-22 TQQQ loss:
+        # bought at 83.01 mid-slide, stopped at 82.43). Only enter once the
+        # drop has paused.
+        if self.sc.vwap_require_entry_confirmation and not self._entry_confirmed(bars):
+            return None
+
         return self._check_entry(candidate, bars, indicators)
 
     # ------------------------------------------------------------------
@@ -176,6 +183,25 @@ class VWAPReversionStrategy(BaseStrategy):
             return False  # not close enough to lower band
 
         return True
+
+    def _entry_confirmed(self, bars: List[Dict]) -> bool:
+        """Falling-knife guard. Confirm a long only once the down-move shows a
+        pause, so we stop buying while price is still making fresh lows.
+
+        Confirmed when the latest bar closes at or above the prior close (an
+        up/flat tick) OR its low holds above the lowest low of the prior N bars.
+        Returns False (stay out) when price is still pressing to new lows.
+        """
+        n = max(2, self.sc.vwap_confirmation_lookback)
+        if len(bars) < n + 1:
+            return False  # not enough history to confirm a pause → stay out
+        closes = [float(b["c"]) for b in bars]
+        lows = [float(b["l"]) for b in bars]
+        if closes[-1] >= closes[-2]:
+            return True
+        if lows[-1] > min(lows[-(n + 1):-1]):
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Exit

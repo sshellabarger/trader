@@ -11,6 +11,7 @@ June 2026 fixes:
     journal the close when the broker actually closed the position.
 """
 import datetime as _dt
+import logging
 
 from trader.config import Config
 from trader.engine import Engine
@@ -186,6 +187,46 @@ def test_vanished_position_journals_real_stop_fill():
     assert engine.risk.daily_pnl < 0              # record_pnl was called
     orb = next(s for s in engine.strategies if s.name == "orb")
     assert "TQQQ" in orb._stopped_out             # on_stop_loss fired
+
+
+def test_reconcile_without_fill_books_estimated_bar_price_and_warns(caplog):
+    # No confirmed broker fill, but bars exist: book the last bar price as an
+    # ESTIMATE (not the entry price), tag it, and warn so it isn't silent.
+    broker = FakeBroker(positions=[])
+    broker.exit_fill = None
+    engine = make_engine(broker)
+    engine._get_bars = lambda sym: [bar("t", 70.0, 70.0, 69.4, 69.50)]
+    engine.journal.open_trade("TQQQ", "orb", "long", 100,
+                              entry_price=70.70, stop_loss=69.90, take_profit=78.70)
+
+    with caplog.at_level(logging.WARNING, logger="trader.engine"):
+        engine._check_exits()
+
+    closed = engine.journal.closed_trades[-1]
+    assert closed.exit_price == 69.50            # estimated from bar, not 70.70 entry
+    assert closed.exit_reason == "estimated_close"
+    assert closed.pnl < 0
+    assert "ESTIMATED" in caplog.text
+
+
+def test_reconcile_without_fill_or_bars_is_flagged_unverified(caplog):
+    # No fill and no bars: must still book, falls back to entry price ($0 P&L),
+    # but the reason and a warning flag it as unverified (the Apr–May blind spot).
+    broker = FakeBroker(positions=[])
+    broker.exit_fill = None
+    engine = make_engine(broker)
+    engine._get_bars = lambda sym: []
+    engine.journal.open_trade("TQQQ", "orb", "long", 100,
+                              entry_price=70.70, stop_loss=69.90, take_profit=78.70)
+
+    with caplog.at_level(logging.WARNING, logger="trader.engine"):
+        engine._check_exits()
+
+    closed = engine.journal.closed_trades[-1]
+    assert closed.exit_price == 70.70            # pure fallback
+    assert closed.pnl == 0.0
+    assert closed.exit_reason == "unverified_close"
+    assert "UNVERIFIED" in caplog.text
 
 
 def test_pending_entry_not_booked_as_phantom_exit():

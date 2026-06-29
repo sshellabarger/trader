@@ -43,6 +43,32 @@ No code change. Validate on paper first, confirm the limits in `RiskConfig`
 (daily_loss_limit_pct, max_position_pct, max_risk_dollars), and watch the first
 live sessions closely. Automated real-money trading can lose money fast.
 
+## Stock sleeve (paper experiment)
+
+By default the bot trades the index legs (TQQQ/SQQQ). It can instead trade a
+basket of individual **high-growth stocks** picked each morning by the scanner
+(premarket gappers/movers), using the same long-only ORB breakout, bracket
+stops, and end-of-day flatten. It is **off** until you switch it on in `.env`,
+so deploying the code changes nothing on its own.
+
+Enable it on the **paper** account by adding to `.env`:
+
+```bash
+STOCK_SLEEVE_ENABLED=true
+# optional — defaults shown:
+# STOCK_SLEEVE_UNIVERSE=tech_volatile,volatile_movers   # what to scan
+# STOCK_SLEEVE_SYMBOLS=NVDA,PLTR,SMCI,ARM,CRWD           # explicit list (overrides universe)
+# STOCK_SLEEVE_MAX_CANDIDATES=5                          # names traded per day
+# STOCK_SLEEVE_MAX_POSITIONS=3                           # held at once
+# STOCK_SLEEVE_MAX_POSITION_PCT=25                       # per-name cap, % of equity
+```
+
+then `docker compose up -d --force-recreate`. Confirm the log line
+`STOCK SLEEVE ON — stocks-only, scanner-driven` and watch the morning picks in
+`docker compose logs -f`. To go back to the index profile, set
+`STOCK_SLEEVE_ENABLED=false` (or remove the line) and recreate. See
+`.env.example` for the full list of toggles and risk caps.
+
 ## Updating later
 
 ```bash

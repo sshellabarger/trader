@@ -49,7 +49,10 @@ class ORBStrategy(BaseStrategy):
     def __init__(self, config: Config, logger: Optional[logging.Logger] = None):
         super().__init__(config, logger)
         self.sc = config.strategy
-        self._today_signal_fired: bool = False
+        # How many ORB entries have filled today. Capped by
+        # orb_max_entries_per_day (default 1 = the index profile's single
+        # breakout/day; the stock sleeve raises it so several names can enter).
+        self._entries_today: int = 0
 
     def evaluate(
         self,
@@ -61,7 +64,7 @@ class ORBStrategy(BaseStrategy):
 
         if not self.sc.orb_enabled:
             return None
-        if self._today_signal_fired:
+        if self._entries_today >= self.sc.orb_max_entries_per_day:
             return None
         if position is not None:
             return None
@@ -211,24 +214,26 @@ class ORBStrategy(BaseStrategy):
         )
 
     def can_open(self, symbol: str) -> bool:
-        # One ORB entry per day across all instruments. evaluate() can't enforce
-        # this within a tick (it runs for every symbol before any order fills),
-        # so the engine consults this just before each entry executes — once one
-        # ORB entry fills, the other instrument is blocked the same day. Without
-        # it a choppy open could buy BOTH TQQQ and SQQQ (a delta-neutral straddle).
-        return not self._today_signal_fired
+        # Cap ORB entries at orb_max_entries_per_day across all instruments.
+        # evaluate() can't enforce this within a tick (it runs for every symbol
+        # before any order fills), so the engine consults this just before each
+        # entry executes. At the default cap of 1 this preserves the index
+        # profile: once one ORB entry fills, the other leg is blocked the same
+        # day, so a choppy open can't buy BOTH TQQQ and SQQQ (a delta-neutral
+        # straddle). The stock sleeve raises the cap to trade several names.
+        return self._entries_today < self.sc.orb_max_entries_per_day
 
     def on_fill(self, symbol: str, signal: Signal):
-        """Consume the day's ORB signal only once an order has actually filled.
+        """Count an ORB entry only once an order has actually filled.
 
-        Setting the flag here (not at signal generation) means a rejected or
-        unfilled order does not forfeit the day — the entry window allows a
-        retry on the next tick.
+        Counting here (not at signal generation) means a rejected or unfilled
+        order does not forfeit a slot — the entry window allows a retry on the
+        next tick.
         """
         super().on_fill(symbol, signal)
         if signal.action == SignalAction.ENTER:
-            self._today_signal_fired = True
+            self._entries_today += 1
 
     def reset_daily(self):
         super().reset_daily()
-        self._today_signal_fired = False
+        self._entries_today = 0

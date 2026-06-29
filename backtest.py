@@ -24,6 +24,7 @@ from .scanner import Candidate
 from .strategies import BaseStrategy, Signal, SignalAction, SignalDirection
 from .strategies.orb import ORBStrategy
 from .strategies.vwap_reversion import VWAPReversionStrategy
+from .news import NewsFeed, allow_entry, fetch_alpaca_news, score_articles
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,8 @@ class Backtester:
         self.config = config
         self.broker = AlpacaBroker(config.broker)
         self.slippage_pct = config.backtest.slippage_bps / 10000.0
+        self._news_feed = None      # set per-run when news_enabled
+        self._news_blocked = 0
         self.commission = config.backtest.commission_per_share
 
     def run(self, symbols: List[str], start_date: str, end_date: str) -> BacktestResult:
@@ -111,6 +114,26 @@ class Backtester:
         )
         regime_daily_bars = self._fetch_regime_bars(regime_symbol, start_date, end_date)
         logger.info(f"Regime: {len(regime_daily_bars)} daily bars for {regime_symbol}")
+
+        # Optional news sentiment filter (OFF unless news_enabled). Pre-fetch the
+        # whole window once; NewsFeed.as_of keeps each per-bar lookup
+        # lookahead-safe. A fetch failure leaves the filter inert, never crashes.
+        self._news_feed = None
+        self._news_blocked = 0
+        if self.config.strategy.news_enabled:
+            sc = self.config.strategy
+            try:
+                articles = score_articles(fetch_alpaca_news(
+                    sc.news_symbols, start_date, end_date,
+                    api_key=self.broker.config.api_key,
+                    api_secret=self.broker.config.api_secret,
+                    max_pages=400,
+                ))
+                self._news_feed = NewsFeed(articles)
+                logger.info(f"News filter ON: {len(articles)} articles for "
+                            f"{','.join(sc.news_symbols)}")
+            except Exception as exc:
+                logger.warning(f"News fetch failed; filter inert this run: {exc}")
 
         all_trades: List[TradeRecord] = []
         equity_curve: List[Tuple[str, float]] = []
@@ -210,6 +233,9 @@ class Backtester:
             del open_positions[sym]
         if equity_curve:
             equity_curve[-1] = (equity_curve[-1][0], capital)
+
+        if self._news_feed is not None:
+            logger.info(f"News filter blocked {self._news_blocked} entries")
 
         result = self._compute_metrics(
             all_trades, equity_curve, self.config.backtest.initial_capital,
@@ -423,6 +449,25 @@ class Backtester:
                 signal = strategy.evaluate(candidate, bars_so_far, indicators, None)
                 if signal and signal.action == SignalAction.ENTER:
                     trade_symbol = signal.symbol
+
+                    # News sentiment gate (inert unless news_enabled). Block
+                    # entries that fight strong recent sentiment. as_of(ctime)
+                    # never sees future articles, so this stays backtest-safe.
+                    if self._news_feed is not None:
+                        sc = self.config.strategy
+                        is_long = signal.direction != SignalDirection.SHORT
+                        bullish = ((trade_symbol == sc.leveraged_bull) if is_long
+                                   else (trade_symbol != sc.leveraged_bull))
+                        ok_news, _why = allow_entry(
+                            self._news_feed, ctime, bullish,
+                            window_min=sc.news_window_min,
+                            block_below=sc.news_block_below,
+                            min_articles=sc.news_min_articles,
+                            symbols=sc.news_symbols,
+                        )
+                        if not ok_news:
+                            self._news_blocked += 1
+                            continue
 
                     positions_list = [
                         PositionInfo(s, 1, p["entry"], current_price,

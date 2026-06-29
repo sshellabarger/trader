@@ -12,6 +12,40 @@ from .dotenv import load_dotenv
 _env_loaded = load_dotenv()
 
 
+# ---------------------------------------------------------------------------
+# Small env helpers. The deployed bot is configured entirely through .env, so
+# the operator can tune toggles and risk caps on the droplet without a code
+# change. Each returns the current default unchanged when the var is unset or
+# unparseable, so a typo never silently zeroes a limit.
+# ---------------------------------------------------------------------------
+
+def _env_bool(name: str, current: bool) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return current
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, current: int) -> int:
+    v = os.getenv(name)
+    if v is None:
+        return current
+    try:
+        return int(v)
+    except ValueError:
+        return current
+
+
+def _env_float(name: str, current: float) -> float:
+    v = os.getenv(name)
+    if v is None:
+        return current
+    try:
+        return float(v)
+    except ValueError:
+        return current
+
+
 @dataclass
 class BrokerConfig:
     api_key: str = ""
@@ -128,6 +162,13 @@ class StrategyConfig:
     vwap_bb_std: float = 2.0
     vwap_require_bullish_regime: bool = True
     vwap_regime_ema_period: int = 20
+    # Falling-knife guard: refuse a reversion entry while price is still
+    # extending its drop. Requires the latest bar to show the down-move has
+    # paused (close >= prior close, or a higher low than the prior N bars).
+    # The daily regime filter can't see an intraday selloff inside a bullish
+    # day; this can.
+    vwap_require_entry_confirmation: bool = True
+    vwap_confirmation_lookback: int = 3
 
     # General
     bar_size: str = "1Min"
@@ -135,26 +176,75 @@ class StrategyConfig:
     max_trades_per_strategy: int = 1
     vwap_regime_symbol: str = "QQQ"
 
+    # News sentiment filter (OFF by default; see trader/news.py). Changes
+    # nothing live until news_enabled is set. Intended as an entry gate once
+    # validated against a backtest A/B.
+    news_enabled: bool = False
+    news_window_min: int = 120
+    news_block_below: float = -0.35
+    news_min_articles: int = 2
+    news_symbols: tuple = ("QQQ",)
+
+    # ── Stock sleeve (stocks-only, scanner-driven) ──────────────────────
+    # When enabled the engine sets the index instruments aside and instead
+    # day-trades a basket of individual high-growth stocks chosen each morning
+    # by the scanner (premarket gappers/movers from the high-growth universe),
+    # using the same long-only ORB breakout, bracket stops, and EOD flatten.
+    #
+    # DEFAULT OFF: the code ships completely inert. The bot keeps trading the
+    # validated TQQQ/SQQQ index profile until the operator sets
+    # STOCK_SLEEVE_ENABLED=true in .env. Intended for the Alpaca PAPER account.
+    stock_sleeve_enabled: bool = False
+    # Universe categories to scan (comma-separated names from universe.UNIVERSE,
+    # e.g. "tech_volatile,volatile_movers").
+    stock_sleeve_universe: str = "tech_volatile,volatile_movers"
+    # Optional explicit symbol list (comma-separated). When set it OVERRIDES the
+    # categories above — handy for a curated watchlist or a tight test.
+    stock_sleeve_symbols: str = ""
+    # Top-N scanner candidates to actually trade each day.
+    stock_sleeve_max_candidates: int = 5
+    # Most stock positions open at once (the sleeve's concurrency cap; in
+    # stocks-only mode this becomes the engine's effective max_positions).
+    stock_sleeve_max_positions: int = 3
+    # Per-name position cap as % of equity. Smaller than the 80% single-index
+    # cap because the sleeve spreads across several names.
+    stock_sleeve_max_position_pct: float = 25.0
+
+    # ORB entries allowed per day. Default 1 preserves the index profile exactly
+    # (one breakout/day across TQQQ+SQQQ → no delta-neutral straddle). The stock
+    # sleeve raises this so several names can break out the same morning.
+    orb_max_entries_per_day: int = 1
+
     def __post_init__(self):
-        # Let the deployed bot toggle the overnight experiments from the
+        # Let the deployed bot toggle experiments and the stock sleeve from the
         # environment (.env) without a code change, mirroring how the broker
         # keys are configured. Code defaults stay off.
-        def _envbool(name: str, current: bool) -> bool:
-            v = os.getenv(name)
-            if v is None:
-                return current
-            return v.strip().lower() in ("1", "true", "yes", "on")
-
-        self.orb_require_overnight_alignment = _envbool(
+        self.orb_require_overnight_alignment = _env_bool(
             "ORB_REQUIRE_OVERNIGHT_ALIGNMENT", self.orb_require_overnight_alignment)
-        self.orb_hold_overnight = _envbool(
+        self.orb_hold_overnight = _env_bool(
             "ORB_HOLD_OVERNIGHT", self.orb_hold_overnight)
-        g = os.getenv("ORB_OVERNIGHT_GAP_MIN_PCT")
-        if g is not None:
-            try:
-                self.orb_overnight_gap_min_pct = float(g)
-            except ValueError:
-                pass
+        # A/B the falling-knife guard from the env without a code change.
+        self.vwap_require_entry_confirmation = _env_bool(
+            "VWAP_REQUIRE_ENTRY_CONFIRMATION", self.vwap_require_entry_confirmation)
+        self.news_enabled = _env_bool("NEWS_ENABLED", self.news_enabled)
+        self.orb_overnight_gap_min_pct = _env_float(
+            "ORB_OVERNIGHT_GAP_MIN_PCT", self.orb_overnight_gap_min_pct)
+
+        # Stock sleeve (default off — see the field comments above).
+        self.stock_sleeve_enabled = _env_bool(
+            "STOCK_SLEEVE_ENABLED", self.stock_sleeve_enabled)
+        self.stock_sleeve_universe = os.getenv(
+            "STOCK_SLEEVE_UNIVERSE", self.stock_sleeve_universe)
+        self.stock_sleeve_symbols = os.getenv(
+            "STOCK_SLEEVE_SYMBOLS", self.stock_sleeve_symbols)
+        self.stock_sleeve_max_candidates = _env_int(
+            "STOCK_SLEEVE_MAX_CANDIDATES", self.stock_sleeve_max_candidates)
+        self.stock_sleeve_max_positions = _env_int(
+            "STOCK_SLEEVE_MAX_POSITIONS", self.stock_sleeve_max_positions)
+        self.stock_sleeve_max_position_pct = _env_float(
+            "STOCK_SLEEVE_MAX_POSITION_PCT", self.stock_sleeve_max_position_pct)
+        self.orb_max_entries_per_day = _env_int(
+            "ORB_MAX_ENTRIES_PER_DAY", self.orb_max_entries_per_day)
 
 
 @dataclass
@@ -182,6 +272,20 @@ class RiskConfig:
 
     no_trade_first_minutes: int = 0
     no_trade_last_minutes: int = 15
+
+    def __post_init__(self):
+        # Risk caps are tunable from .env on the droplet (no code change), so a
+        # stock-sleeve deploy can be bounded without editing the image. Defaults
+        # are unchanged when the vars are unset.
+        self.risk_per_trade_pct = _env_float("RISK_PER_TRADE_PCT", self.risk_per_trade_pct)
+        self.max_position_pct = _env_float("MAX_POSITION_PCT", self.max_position_pct)
+        self.max_positions = _env_int("MAX_POSITIONS", self.max_positions)
+        self.max_total_exposure_pct = _env_float(
+            "MAX_TOTAL_EXPOSURE_PCT", self.max_total_exposure_pct)
+        self.max_risk_dollars = _env_float("MAX_RISK_DOLLARS", self.max_risk_dollars)
+        self.daily_loss_limit_pct = _env_float(
+            "DAILY_LOSS_LIMIT_PCT", self.daily_loss_limit_pct)
+        self.max_daily_trades = _env_int("MAX_DAILY_TRADES", self.max_daily_trades)
 
 
 @dataclass
@@ -245,3 +349,16 @@ class Config:
         if self.strategy.use_leveraged:
             return [self.strategy.leveraged_bull]
         return [self.strategy.primary_symbol]
+
+    def stock_sleeve_scan_universe(self) -> List[str]:
+        """Symbols the stock-sleeve scanner considers each morning.
+
+        An explicit STOCK_SLEEVE_SYMBOLS list wins; otherwise pull the named
+        universe categories (STOCK_SLEEVE_UNIVERSE) from universe.UNIVERSE.
+        """
+        explicit = self.strategy.stock_sleeve_symbols.strip()
+        if explicit:
+            return [s.strip().upper() for s in explicit.split(",") if s.strip()]
+        from .universe import get_universe
+        cats = [c.strip() for c in self.strategy.stock_sleeve_universe.split(",") if c.strip()]
+        return get_universe(cats) if cats else []

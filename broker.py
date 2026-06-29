@@ -74,7 +74,18 @@ class AlpacaBroker:
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
-                return resp.json()
+                # A successful DELETE (e.g. cancelling a single order) returns
+                # 204 No Content. Calling .json() on an empty body raises
+                # JSONDecodeError, which subclasses RequestException — so it was
+                # caught below, logged as an error, and retried twice. The cancel
+                # had actually succeeded. Treat an empty body as success.
+                if resp.status_code == 204 or not resp.content:
+                    return {}
+                try:
+                    return resp.json()
+                except ValueError:
+                    # 2xx with a non-JSON body is still a success, just no payload.
+                    return {}
             except requests.exceptions.HTTPError as exc:
                 logger.error(f"HTTP {exc.response.status_code} {method} {url}: {exc.response.text[:200]}")
                 return None
