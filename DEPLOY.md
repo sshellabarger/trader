@@ -69,6 +69,28 @@ then `docker compose up -d --force-recreate`. Confirm the log line
 `STOCK_SLEEVE_ENABLED=false` (or remove the line) and recreate. See
 `.env.example` for the full list of toggles and risk caps.
 
+### Keeping the candidate pool fresh (weekly screen)
+
+By default the sleeve scans a static high-growth list. To keep that pool current
+you can rebuild it from a liquidity + volatility screen (average dollar volume
+and ATR%) over all active US equities, and point the sleeve at the result:
+
+```bash
+docker compose run --rm trader python -m trader screen-universe --out data/pool.json
+```
+
+That writes `data/pool.json` (persisted via the `./data` volume). Then add
+`STOCK_SLEEVE_POOL_FILE=data/pool.json` to `.env` and recreate; the sleeve will
+scan the screened pool instead of the static list (an explicit
+`STOCK_SLEEVE_SYMBOLS` still wins if set). Tune with `--min-dollar-vol`,
+`--min-atr-pct`, `--min-price/--max-price`, and `--max` (pool size). Run it on a
+schedule (e.g. a weekly cron entry on the droplet) to refresh automatically:
+
+```
+# /etc/cron.d/trader-pool  — rebuild the sleeve pool every Sunday 18:00
+0 18 * * 0 root cd /root/trader && docker compose run --rm trader python -m trader screen-universe --out data/pool.json >> /var/log/trader-pool.log 2>&1
+```
+
 ## Updating later
 
 ```bash

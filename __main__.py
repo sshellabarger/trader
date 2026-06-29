@@ -110,6 +110,49 @@ def cmd_walkforward(args):
         print("  VERDICT: MIXED")
 
 
+def cmd_screen(args):
+    """Build the stock-sleeve pool by liquidity + volatility and write it to a
+    file the sleeve reads (STOCK_SLEEVE_POOL_FILE). Meant to run weekly."""
+    from .broker import AlpacaBroker
+    from . import universe as uni
+    from . import universe_screen as us
+
+    config = Config()
+    config.log_level = args.log_level
+    setup_logging(config.log_level)
+
+    broker = AlpacaBroker(config.broker)
+    if args.seed_universe:
+        seed, src = uni.get_universe(), "in-repo universe"
+    else:
+        seed, src = broker.list_assets(), "Alpaca active US equities"
+        if not seed:
+            print("No assets from Alpaca (check keys/network); using the in-repo universe.")
+            seed, src = uni.get_universe(), "in-repo universe (fallback)"
+    if args.limit_seed:
+        seed = seed[: args.limit_seed]
+
+    crit = us.ScreenCriteria(
+        min_price=args.min_price, max_price=args.max_price,
+        min_dollar_volume=args.min_dollar_vol, min_atr_pct=args.min_atr_pct,
+        window=args.window, atr_period=args.atr_period, size=args.max,
+    )
+    print(f"Screening {len(seed)} symbols ({src}) -> pool of {crit.size}  "
+          f"[price ${crit.min_price:g}-${crit.max_price:g}, "
+          f">=${crit.min_dollar_volume/1e6:g}M/day, ATR% >= {crit.min_atr_pct:g}]")
+    pool = us.build_pool(broker, seed, crit, prefilter=not args.no_prefilter)
+    us.write_pool(args.out, pool, crit)
+
+    print(f"\nWrote {len(pool)} names to {args.out}:")
+    print(f"  {'SYM':6s} {'PRICE':>9s} {'$VOL/DAY':>11s} {'ATR%':>7s}")
+    for s in pool[:30]:
+        print(f"  {s.symbol:6s} {s.price:>9.2f} {s.dollar_volume/1e6:>9.1f}M {s.atr_pct:>6.1f}%")
+    if len(pool) > 30:
+        print(f"  ... +{len(pool) - 30} more")
+    if not pool:
+        print("  (empty — loosen the floors, check the data feed, or widen the price band)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DayTrader v2 — ETF Edition")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
@@ -139,6 +182,23 @@ def main():
     wf_p.add_argument("--test-days", type=int, default=20)
     wf_p.add_argument("--step-days", type=int, default=20)
 
+    sc_p = sub.add_parser("screen-universe",
+                          help="Build the stock-sleeve pool by liquidity + volatility")
+    sc_p.add_argument("--out", default="data/pool.json", help="output pool file")
+    sc_p.add_argument("--max", type=int, default=60, help="pool size (top-N by ATR%%)")
+    sc_p.add_argument("--min-dollar-vol", type=float, default=20_000_000.0,
+                      help="min 20-day average $ volume")
+    sc_p.add_argument("--min-atr-pct", type=float, default=2.5, help="min ATR%% of price")
+    sc_p.add_argument("--min-price", type=float, default=5.0)
+    sc_p.add_argument("--max-price", type=float, default=1000.0)
+    sc_p.add_argument("--window", type=int, default=20, help="days for avg $ volume")
+    sc_p.add_argument("--atr-period", type=int, default=14)
+    sc_p.add_argument("--seed-universe", action="store_true",
+                      help="seed from the in-repo universe instead of all Alpaca assets")
+    sc_p.add_argument("--limit-seed", type=int, default=0, help="cap seed size (debug)")
+    sc_p.add_argument("--no-prefilter", action="store_true",
+                      help="skip the snapshot pre-filter")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -147,6 +207,8 @@ def main():
         cmd_backtest(args)
     elif args.command == "walkforward":
         cmd_walkforward(args)
+    elif args.command == "screen-universe":
+        cmd_screen(args)
     else:
         parser.print_help()
 

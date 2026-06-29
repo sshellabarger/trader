@@ -9,6 +9,7 @@ __pycache__/
 .claude/
 *.log
 trade_logs/
+data/
 backtest_results/
 venv/
 .venv/

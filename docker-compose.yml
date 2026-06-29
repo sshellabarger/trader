@@ -11,6 +11,9 @@ services:
     volumes:
       # Persist the trade journal across restarts/redeploys.
       - ./trade_logs:/app/trade_logs
+      # Persist the screened stock-sleeve pool (written weekly by
+      # `docker compose run --rm trader python -m trader screen-universe`).
+      - ./data:/app/data
     logging:
       driver: json-file
       options:

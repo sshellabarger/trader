@@ -387,6 +387,34 @@ class AlpacaBroker:
         return all_snaps
 
     # ------------------------------------------------------------------
+    # Reference data — Assets (seed universe for the screener)
+    # ------------------------------------------------------------------
+
+    def list_assets(self, status: str = "active",
+                    asset_class: str = "us_equity") -> List[str]:
+        """Tradable, active US-equity symbols on the major exchanges — the seed
+        universe the screener filters down. Drops OTC and non-plain symbols
+        (preferreds/warrants/units with dots or >5 chars). Returns a sorted
+        symbol list, or [] on failure so callers can fall back to a static seed.
+        """
+        result = self._request(
+            "GET", f"{self.base_url}/v2/assets",
+            params={"status": status, "asset_class": asset_class},
+        )
+        if not isinstance(result, list):
+            return []
+        syms = set()
+        for a in result:
+            if not isinstance(a, dict) or not a.get("tradable"):
+                continue
+            if a.get("exchange") == "OTC":
+                continue
+            sym = (a.get("symbol") or "").upper()
+            if sym.isalpha() and 1 <= len(sym) <= 5:
+                syms.add(sym)
+        return sorted(syms)
+
+    # ------------------------------------------------------------------
     # Market Data — Latest Quote / Trade
     # ------------------------------------------------------------------
 

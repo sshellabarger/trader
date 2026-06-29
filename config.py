@@ -201,6 +201,10 @@ class StrategyConfig:
     # Optional explicit symbol list (comma-separated). When set it OVERRIDES the
     # categories above — handy for a curated watchlist or a tight test.
     stock_sleeve_symbols: str = ""
+    # Optional path to a screened pool file (written by
+    # `python -m trader screen-universe`). When set and readable it is the scan
+    # universe, so the pool stays current instead of using the static categories.
+    stock_sleeve_pool_file: str = ""
     # Top-N scanner candidates to actually trade each day.
     stock_sleeve_max_candidates: int = 5
     # Most stock positions open at once (the sleeve's concurrency cap; in
@@ -237,6 +241,8 @@ class StrategyConfig:
             "STOCK_SLEEVE_UNIVERSE", self.stock_sleeve_universe)
         self.stock_sleeve_symbols = os.getenv(
             "STOCK_SLEEVE_SYMBOLS", self.stock_sleeve_symbols)
+        self.stock_sleeve_pool_file = os.getenv(
+            "STOCK_SLEEVE_POOL_FILE", self.stock_sleeve_pool_file)
         self.stock_sleeve_max_candidates = _env_int(
             "STOCK_SLEEVE_MAX_CANDIDATES", self.stock_sleeve_max_candidates)
         self.stock_sleeve_max_positions = _env_int(
@@ -353,12 +359,19 @@ class Config:
     def stock_sleeve_scan_universe(self) -> List[str]:
         """Symbols the stock-sleeve scanner considers each morning.
 
-        An explicit STOCK_SLEEVE_SYMBOLS list wins; otherwise pull the named
+        Priority: an explicit STOCK_SLEEVE_SYMBOLS list wins; then a screened
+        STOCK_SLEEVE_POOL_FILE if set and non-empty; otherwise the named
         universe categories (STOCK_SLEEVE_UNIVERSE) from universe.UNIVERSE.
         """
         explicit = self.strategy.stock_sleeve_symbols.strip()
         if explicit:
             return [s.strip().upper() for s in explicit.split(",") if s.strip()]
+        pool_file = self.strategy.stock_sleeve_pool_file.strip()
+        if pool_file:
+            from .universe_screen import load_pool_symbols
+            syms = load_pool_symbols(pool_file)
+            if syms:
+                return syms          # else fall through to the static categories
         from .universe import get_universe
         cats = [c.strip() for c in self.strategy.stock_sleeve_universe.split(",") if c.strip()]
         return get_universe(cats) if cats else []
