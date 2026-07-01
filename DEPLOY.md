@@ -56,12 +56,25 @@ Enable it on the **paper** account by adding to `.env`:
 ```bash
 STOCK_SLEEVE_ENABLED=true
 # optional — defaults shown:
-# STOCK_SLEEVE_UNIVERSE=tech_volatile,volatile_movers   # what to scan
+# STOCK_SLEEVE_UNIVERSE=liquid_movers                    # what to scan
 # STOCK_SLEEVE_SYMBOLS=NVDA,PLTR,SMCI,ARM,CRWD           # explicit list (overrides universe)
 # STOCK_SLEEVE_MAX_CANDIDATES=5                          # names traded per day
 # STOCK_SLEEVE_MAX_POSITIONS=3                           # held at once
 # STOCK_SLEEVE_MAX_POSITION_PCT=25                       # per-name cap, % of equity
 ```
+
+**Data feed matters for the sleeve.** On the free **IEX** feed Alpaca only prints
+intraday bars for liquid names, so the sleeve's default universe is
+`liquid_movers` (curated for IEX coverage). Low-priced / low-float names (the old
+`volatile_movers` pool — BITF, SOUN, etc.) return *no bars* on IEX and never
+trade. To trade the wider, more volatile pool, subscribe to Alpaca **Algo Trader
+Plus** (SIP real-time, ~$99/month), set `APCA_DATA_FEED=sip` in `.env`, then
+switch `STOCK_SLEEVE_UNIVERSE` to `tech_volatile,volatile_movers`.
+
+The daily journal (`./trade_logs/summary_<date>.json`) now records a `context`
+block every day — the day's picks, per-symbol bar status (which names got no
+data), and skip reasons — so a no-trade day is legible without reading the
+container logs.
 
 then `docker compose up -d --force-recreate`. Confirm the log line
 `STOCK SLEEVE ON — stocks-only, scanner-driven` and watch the morning picks in

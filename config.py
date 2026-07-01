@@ -195,9 +195,13 @@ class StrategyConfig:
     # validated TQQQ/SQQQ index profile until the operator sets
     # STOCK_SLEEVE_ENABLED=true in .env. Intended for the Alpaca PAPER account.
     stock_sleeve_enabled: bool = False
-    # Universe categories to scan (comma-separated names from universe.UNIVERSE,
-    # e.g. "tech_volatile,volatile_movers").
-    stock_sleeve_universe: str = "tech_volatile,volatile_movers"
+    # Universe categories to scan (comma-separated names from universe.UNIVERSE).
+    # Default is "liquid_movers": high-beta names that still trade enough volume
+    # for the FREE IEX feed to print intraday bars. The older
+    # "tech_volatile,volatile_movers" pool includes low-priced / low-float names
+    # (e.g. BITF) that IEX barely covers, so the sleeve got no bars and never
+    # traded — only use those on the paid SIP feed (APCA_DATA_FEED=sip).
+    stock_sleeve_universe: str = "liquid_movers"
     # Optional explicit symbol list (comma-separated). When set it OVERRIDES the
     # categories above — handy for a curated watchlist or a tight test.
     stock_sleeve_symbols: str = ""

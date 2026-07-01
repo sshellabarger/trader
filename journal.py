@@ -92,6 +92,14 @@ class TradeJournal:
         self.closed_trades: List[TradeRecord] = []
         self._today = date.today().isoformat()
 
+        # Session diary — context captured even on a NO-TRADE day, so a later
+        # review can see what the bot did and why it passed. It is folded into
+        # the daily summary JSON (see daily_summary), which persists on the host.
+        # Every setter is best-effort and must never raise into the trade loop.
+        self.session: Dict = {}                    # config snapshot + equity + picks
+        self.symbol_status: Dict[str, Dict] = {}   # symbol -> {status, bars, price}
+        self.skips: List[Dict] = []                # [{symbol, stage, reason}]
+
     # ------------------------------------------------------------------
     # Trade lifecycle
     # ------------------------------------------------------------------
@@ -149,25 +157,93 @@ class TradeJournal:
         return record
 
     # ------------------------------------------------------------------
+    # Session diary (recorded even when nothing trades)
+    # ------------------------------------------------------------------
+
+    def note_session(self, **context) -> None:
+        """Merge once-per-day context: config snapshot, opening equity, mode."""
+        self.session.update(context)
+
+    def note_picks(self, symbols: List[str],
+                   hotlist: Optional[List[str]] = None) -> None:
+        """Record the day's candidate picks (and any news hot-list)."""
+        self.session["picks"] = list(symbols or [])
+        if hotlist is not None:
+            self.session["news_hotlist"] = list(hotlist)
+
+    def note_symbol(self, symbol: str, status: str,
+                    bars: int = 0, price: Optional[float] = None) -> None:
+        """Record the latest per-symbol data status for the day (e.g. "ok" or
+        "no_bars"). Overwrites, so it reflects the most recent tick."""
+        self.symbol_status[symbol] = {
+            "status": status,
+            "bars": bars,
+            "price": round(price, 4) if isinstance(price, (int, float)) else None,
+        }
+
+    def note_skip(self, symbol: str, stage: str, reason: str) -> None:
+        """Record a candidate that was considered but not entered, and why."""
+        self.skips.append({"symbol": symbol, "stage": stage, "reason": str(reason)})
+        if len(self.skips) > 1000:              # bound memory over a long session
+            self.skips = self.skips[-1000:]
+
+    def note_equity_close(self, equity: float) -> None:
+        """Record end-of-day equity (best-effort)."""
+        try:
+            self.session["equity_close"] = round(float(equity), 2)
+        except (TypeError, ValueError):
+            pass
+
+    def _session_context(self) -> Dict:
+        """Assemble the day's diary block: config/equity/picks, per-symbol data
+        status, and a compact tally of skip reasons."""
+        ctx = dict(self.session)
+        if self.symbol_status:
+            ctx["symbols"] = self.symbol_status
+            ctx["symbols_with_bars"] = sorted(
+                s for s, v in self.symbol_status.items() if v.get("status") == "ok"
+            )
+            ctx["symbols_no_bars"] = sorted(
+                s for s, v in self.symbol_status.items() if v.get("status") != "ok"
+            )
+        if self.skips:
+            from collections import Counter
+            counts = Counter((s["stage"], s["reason"]) for s in self.skips)
+            ctx["skips"] = {
+                "total": len(self.skips),
+                "by_reason": [
+                    {"stage": st, "reason": r, "count": c}
+                    for (st, r), c in counts.most_common(20)
+                ],
+            }
+        return ctx
+
+    # ------------------------------------------------------------------
     # Daily summary
     # ------------------------------------------------------------------
 
     def daily_summary(self) -> Dict:
-        """Generate summary stats for today's closed trades."""
+        """Summary stats for today, ALWAYS including the session diary so a
+        no-trade day is still legible (config, equity, picks, per-symbol data
+        status, and skip reasons)."""
         trades = self.closed_trades
+        total_pnl = sum(t.pnl for t in trades)
+
+        summary: Dict = {
+            "date": self._today,
+            "trades": len(trades),
+            "pnl": round(total_pnl, 2),
+            "context": self._session_context(),
+        }
         if not trades:
-            return {"trades": 0, "pnl": 0}
+            return summary
 
         winners = [t for t in trades if t.is_winner]
         losers = [t for t in trades if not t.is_winner]
-        total_pnl = sum(t.pnl for t in trades)
-
-        summary = {
-            "date": self._today,
-            "trades": len(trades),
+        summary.update({
             "winners": len(winners),
             "losers": len(losers),
-            "win_rate": len(winners) / len(trades) * 100 if trades else 0,
+            "win_rate": len(winners) / len(trades) * 100,
             "total_pnl": round(total_pnl, 2),
             "avg_win": round(sum(t.pnl for t in winners) / len(winners), 2) if winners else 0,
             "avg_loss": round(sum(t.pnl for t in losers) / len(losers), 2) if losers else 0,
@@ -176,7 +252,7 @@ class TradeJournal:
             "avg_hold_minutes": round(
                 sum(t.hold_time_minutes for t in trades) / len(trades), 1
             ) if trades else 0,
-        }
+        })
 
         # Per-strategy breakdown
         strategies: Dict[str, Dict] = {}

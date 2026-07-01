@@ -76,12 +76,29 @@ UNIVERSE: Dict[str, List[str]] = {
     ],
 
     # ── Volatile movers (small/mid cap, big intraday ranges) ────────
+    # NOTE: many names here are low-priced / low-float and have SPARSE coverage
+    # on the free IEX feed — the live sleeve often gets no intraday bars for them
+    # (e.g. BITF), so they can never trigger. Prefer "liquid_movers" below unless
+    # running on the paid SIP feed (APCA_DATA_FEED=sip).
     "volatile_movers": [
         "RIVN", "LCID", "NIO", "XPEV", "LI", "LAZR",
         "RIOT", "CLSK", "BITF", "CIFR",
         "SNAP", "PINS", "ROKU", "LYFT", "UBER", "DASH", "RBLX",
         "AI", "BBAI", "SOUN", "IONQ", "RGTI", "QUBT",
         "UPST", "OPEN", "CVNA", "CAVA", "DUOL", "RDDT",
+    ],
+
+    # ── Liquid movers (high-beta but heavily traded — reliable IEX bars) ──
+    # Curated for the stock sleeve on the FREE IEX feed: every name is a big
+    # intraday mover AND trades enough volume that IEX prints a 1-minute bar
+    # essentially every minute, so the sleeve actually gets data and can enter.
+    # Deliberately excludes sub-$15 / low-float names that IEX barely covers.
+    # This is the recommended sleeve universe until the paid SIP feed is enabled.
+    "liquid_movers": [
+        "NVDA", "AMD", "TSLA", "META", "AVGO", "MU", "MRVL", "SMCI",
+        "ARM", "PLTR", "MSTR", "CRWD", "PANW", "SNOW", "NET", "DDOG",
+        "SHOP", "COIN", "HOOD", "UBER", "QCOM", "LRCX", "KLAC", "ANET",
+        "MARA", "AAPL", "AMZN", "NFLX",
     ],
 
     # ── ETFs (sector plays, broad market, always liquid) ────────────

@@ -32,9 +32,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ScreenCriteria:
-    min_price: float = 5.0
+    # Floors are set so the screened pool is tradable on the FREE IEX feed: the
+    # live sleeve gets no intraday bars for thin / low-priced names (e.g. BITF),
+    # so they can never trigger. A $10 price floor and a $50M average-dollar-
+    # volume floor keep names IEX actually prints a bar for every minute. Loosen
+    # these only on the paid SIP feed (APCA_DATA_FEED=sip).
+    min_price: float = 10.0
     max_price: float = 1000.0
-    min_dollar_volume: float = 20_000_000.0   # 20-day avg $ volume (liquidity floor)
+    min_dollar_volume: float = 50_000_000.0   # 20-day avg $ volume (liquidity floor)
     min_atr_pct: float = 2.5                   # ATR as a % of price (volatility floor)
     window: int = 20                           # days for average dollar volume
     atr_period: int = 14

@@ -106,6 +106,11 @@ class Engine:
         self._today: Optional[str] = None
         self._bars_cache: Dict[str, List[Dict]] = {}
         self._indicators_cache: Dict[str, Dict] = {}
+        # Per-symbol data status last emitted to the log, so "No bars yet" logs
+        # ONCE when it starts instead of every 30s (which floods the log and
+        # rotates useful lines out). Reset each new day. The full per-symbol
+        # picture is persisted in the daily summary regardless.
+        self._sym_status_logged: Dict[str, str] = {}
         self._flatten_requested = False  # EOD liquidation issued for today
         self._pending_close: set = set()  # symbols committed to exit, retried each tick
         # symbol → UTC ISO time the entry was submitted; bounds exit-fill lookups
@@ -209,6 +214,7 @@ class Engine:
             ok, why = self._news_gate(signal.symbol)
             if not ok:
                 logger.info(f"News gate: skip {signal.symbol} ({why})")
+                self._safe_note_skip(signal.symbol, "news", why)
                 continue
             self._execute_entry(signal)
 
@@ -227,10 +233,16 @@ class Engine:
             # so every subsequent tick re-entered _new_day, re-raised, and the
             # bot stopped trading entirely until the process was restarted.
             try:
+                self.journal.note_equity_close(self.broker.get_equity())
                 self.journal.save_daily_csv()
                 self.journal.save_daily_summary()
                 summary = self.journal.daily_summary()
-                logger.info(f"Day ended — {summary}")
+                ctx = summary.get("context", {})
+                logger.info(
+                    "Day ended — trades=%d pnl=%.2f picks=%s no_bars=%s",
+                    summary.get("trades", 0), summary.get("pnl", 0.0),
+                    ctx.get("picks", []), ctx.get("symbols_no_bars", []),
+                )
             except Exception as exc:
                 logger.error(
                     f"Failed to persist journal for {self._today}: {exc}",
@@ -252,6 +264,7 @@ class Engine:
 
         self._bars_cache.clear()
         self._indicators_cache.clear()
+        self._sym_status_logged.clear()
         self._flatten_requested = False
         self._pending_close.clear()
         self._entry_time_utc.clear()
@@ -259,6 +272,20 @@ class Engine:
         equity = self.broker.get_equity()
         if equity > 0:
             self.risk.reset_daily(equity)
+
+        # Seed the day's journal diary with a config snapshot + opening equity so
+        # the persisted summary explains the setup even on a no-trade day. Never
+        # let a diary write interfere with the day roll.
+        try:
+            self.journal.note_session(
+                mode=("stock_sleeve" if self.sleeve_enabled else "index"),
+                data_feed=self.config.broker.data_feed,
+                dry_run=self.config.dry_run,
+                equity_open=round(equity, 2) if equity else None,
+                index_symbols=(None if self.sleeve_enabled else list(self.symbols)),
+            )
+        except Exception:
+            pass
 
         # Overnight gap is computed from QQQ PREMARKET data once the session is
         # under way (see _ensure_overnight_gap), not here: _new_day runs at the
@@ -393,6 +420,38 @@ class Engine:
             s.orb_max_entries_per_day, self.risk.config.max_daily_trades,
         )
 
+    def _safe_note_picks(self, symbols: List[str]) -> None:
+        """Record the day's sleeve picks in the journal diary (best-effort)."""
+        try:
+            self.journal.note_picks(symbols, self._news_hotlist)
+        except Exception:
+            pass
+
+    def _safe_note_skip(self, symbol: str, stage: str, reason: str) -> None:
+        """Record a considered-but-not-taken entry in the diary (best-effort)."""
+        try:
+            self.journal.note_skip(symbol, stage, reason)
+        except Exception:
+            pass
+
+    def _note_symbol_status(self, symbol: str, status: str, bars: int = 0,
+                            price: Optional[float] = None, extra: str = "") -> None:
+        """Record per-symbol data status in the journal every tick, but only emit
+        an INFO log when it CHANGES. This stops 'No bars yet for X' flooding the
+        log every 30s (which rotates useful lines out) while still capturing the
+        full picture in the persisted daily summary."""
+        try:
+            self.journal.note_symbol(symbol, status, bars=bars, price=price)
+        except Exception:
+            pass
+        if self._sym_status_logged.get(symbol) == status:
+            return
+        self._sym_status_logged[symbol] = status
+        if status == "ok":
+            logger.info(f"{symbol}: {bars} bars, {extra}".rstrip())
+        else:
+            logger.info(f"No bars yet for {symbol}")
+
     def _ensure_sleeve_symbols(self):
         """Pick the day's stocks once, by scanning the high-growth universe for
         premarket gappers/movers. Runs after the open so snapshots carry today's
@@ -412,6 +471,7 @@ class Engine:
             logger.warning("Stock sleeve: empty scan universe; trading nothing today")
             self.symbols = []
             self._sleeve_scanned_day = today
+            self._safe_note_picks([])
             return
         try:
             candidates = scan_candidates(self.broker, universe, self.config.scanner)
@@ -421,6 +481,7 @@ class Engine:
         picks = candidates[: self.config.strategy.stock_sleeve_max_candidates]
         self.symbols = [c.symbol for c in picks]
         self._sleeve_scanned_day = today
+        self._safe_note_picks(self.symbols)
         if picks:
             detail = ", ".join(
                 f"{c.symbol}({c.gap_pct:+.1f}% rvol{c.relative_volume:.1f})"
@@ -490,11 +551,12 @@ class Engine:
         for sym in self.symbols:
             bars = self._get_bars(sym)
             if not bars:
-                logger.info(f"No bars yet for {sym}")
+                self._note_symbol_status(sym, "no_bars")
                 continue
 
-            logger.info(f"{sym}: {len(bars)} bars, "
-                        f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
+            self._note_symbol_status(
+                sym, "ok", bars=len(bars), price=float(bars[-1]["c"]),
+                extra=f"latest=${float(bars[-1]['c']):.2f} @ {bars[-1].get('t', '?')}")
 
             indicators = compute_indicators(bars)
             # Supply the day's overnight gap to the ORB overnight-alignment gate,
@@ -564,12 +626,14 @@ class Engine:
         ok, reason = self.risk.validate_entry(signal, equity, buying_power, positions)
         if not ok:
             logger.debug(f"Entry blocked: {reason}")
+            self._safe_note_skip(signal.symbol, "risk", reason)
             return
 
         size = self.risk.calculate_position_size(
             signal, equity, buying_power, len(positions)
         )
         if size.shares < 1:
+            self._safe_note_skip(signal.symbol, "size", "position_size<1_share")
             return
 
         logger.info(
@@ -824,6 +888,7 @@ class Engine:
                 self.risk.clear_symbol(sym)
                 if record:
                     self.risk.record_pnl(record.pnl)
+        self.journal.note_equity_close(self.broker.get_equity())
         self.journal.save_daily_csv()
         self.journal.save_daily_summary()
         logger.info("Engine stopped.")
