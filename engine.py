@@ -116,6 +116,10 @@ class Engine:
         # symbol → UTC ISO time the entry was submitted; bounds exit-fill lookups
         # so a stale prior-session fill can't be booked as this trade's exit.
         self._entry_time_utc: Dict[str, str] = {}
+        # symbol → entry order id awaiting its real fill price. Each tick the
+        # journal's entry is reconciled to filled_avg_price (see
+        # _reconcile_entry_fills), mirroring the honesty exits already have.
+        self._pending_entry_orders: Dict[str, str] = {}
         # Today's overnight gap (regime symbol prior close -> premarket), for the
         # optional ORB overnight-alignment filter. Computed lazily once the
         # session is under way (see _ensure_overnight_gap) and cached for the day.
@@ -183,6 +187,10 @@ class Engine:
 
         if closing:
             self._flatten_all("end_of_day")
+
+        # Reconcile entry fills FIRST so a position that exits this same tick
+        # books its P&L against the real entry price, not the signal price.
+        self._reconcile_entry_fills()
 
         # Always reconcile: positions that have left the book (a bracket TP/SL
         # fill, or the just-issued EOD flatten) are journaled at their real fill
@@ -268,6 +276,7 @@ class Engine:
         self._flatten_requested = False
         self._pending_close.clear()
         self._entry_time_utc.clear()
+        self._pending_entry_orders.clear()
 
         equity = self.broker.get_equity()
         if equity > 0:
@@ -669,6 +678,11 @@ class Engine:
                 signal.entry_price, signal.stop_loss, signal.take_profit,
                 signal.reason, signal.indicators,
             )
+            # Track the parent order so the journal's entry price can be
+            # reconciled to the REAL fill on subsequent ticks.
+            order_id = order.get("id") if isinstance(order, dict) else None
+            if order_id:
+                self._pending_entry_orders[signal.symbol] = str(order_id)
             # Stamp the entry time so a later "position gone" reconciliation only
             # books exit fills that happened after this point.
             self._entry_time_utc[signal.symbol] = datetime.now(timezone.utc).isoformat()
@@ -678,6 +692,49 @@ class Engine:
             self.risk.record_entry()
         else:
             logger.warning(f"Order not accepted for {signal.symbol}; signal not consumed")
+
+    def _reconcile_entry_fills(self):
+        """Journal each pending entry at its REAL fill price.
+
+        _execute_entry journals the signal price — the only price available at
+        submit time — but the bracket parent is a MARKET order sent from a 30s
+        poll loop, so the real fill includes spread and delay. Exits already
+        get booked at real fills via last_filled_exit(); without the same on
+        entries, live P&L is systematically flattered and can never be used to
+        calibrate the backtest's slippage assumption. Terminal-but-unfilled
+        orders close their journal record so a rejected entry can't linger as
+        a phantom open trade.
+        """
+        if not self._pending_entry_orders:
+            return
+        get_order = getattr(self.broker, "get_order", None)
+        if get_order is None:  # minimal broker double in tests
+            self._pending_entry_orders.clear()
+            return
+        for symbol, order_id in list(self._pending_entry_orders.items()):
+            try:
+                order = get_order(order_id)
+            except Exception as exc:  # transient network error: retry next tick
+                logger.debug(f"entry-fill check failed for {symbol}: {exc}")
+                continue
+            if not isinstance(order, dict):
+                continue
+            status = (order.get("status") or "").lower()
+            fill = order.get("filled_avg_price")
+            if fill:
+                try:
+                    self.journal.update_entry_fill(symbol, float(fill))
+                except (TypeError, ValueError):
+                    logger.warning(f"unparseable entry fill for {symbol}: {fill!r}")
+                self._pending_entry_orders.pop(symbol, None)
+            elif status in ("canceled", "cancelled", "expired", "rejected"):
+                logger.warning(f"entry order for {symbol} ended '{status}' with no fill")
+                record = self.journal.open_trades.get(symbol)
+                if record is not None:
+                    # Zero-P&L close: the position never existed.
+                    self.journal.close_trade(symbol, record.entry_price,
+                                             f"entry_{status}")
+                self._pending_entry_orders.pop(symbol, None)
 
     def _check_exits(self, reconcile_only: bool = False):
         if not self.journal.open_trades:

@@ -315,6 +315,10 @@ class Backtester:
         trades: List[TradeRecord] = []
         warmup = 5  # bars before a symbol is eligible (range + indicators)
         bp = capital * self.config.backtest.margin_multiple  # mirror live buying power
+        # entry_fill_next_open: signals waiting to fill at the NEXT bar's open
+        # (symbol → pending entry details). Local to the day on purpose — an
+        # unfilled market order does not survive the session.
+        pending_entries: Dict[str, Dict] = {}
 
         # Overnight-hold: a position carried in from a prior day exits at THIS
         # day's open (capturing the overnight close->open move) before any new
@@ -354,6 +358,30 @@ class Backtester:
             ctime = current_bar.get("t", "")
             mins_left = minutes_to_close(t_iso)
 
+            # --- Deferred entry fill (entry_fill_next_open) ---
+            # A signal from bar N fills as a market order at bar N+1's OPEN —
+            # the earliest price the live poll-loop bot could actually get.
+            # Booked before exit handling so this bar's low/high can stop the
+            # brand-new position out realistically within its fill bar.
+            pend = pending_entries.get(sym)
+            if pend is not None and idx > pend["signal_idx"]:
+                fill_ref = float(current_bar.get("o", current_price))
+                if pend["direction"] == "short":
+                    entry_px = fill_ref * (1 - self.slippage_pct)
+                else:
+                    entry_px = fill_ref * (1 + self.slippage_pct)
+                open_positions[sym] = {
+                    "entry": entry_px,
+                    "stop": pend["stop"],
+                    "tp": pend["tp"],
+                    "qty": pend["qty"],
+                    "strategy": pend["strategy"],
+                    "entry_time": ctime,
+                    "reason": pend["reason"],
+                    "direction": pend["direction"],
+                }
+                del pending_entries[sym]
+
             # --- Exit handling for this symbol's open position ---
             if sym in open_positions:
                 pos = open_positions[sym]
@@ -373,19 +401,31 @@ class Backtester:
                         del open_positions[sym]
                         continue
 
-                # Intrabar stop / take-profit
+                # Intrabar stop / take-profit — gap-aware fills. A stop is a
+                # MARKET order once touched: if the bar OPENS beyond the stop
+                # (gapped through), the realistic fill is the open, not the
+                # stop price. Stops were 139 of 209 exits in the 1-yr run, so
+                # assuming at-price fills systematically overstated results.
+                # A take-profit LIMIT gets the favorable side of the same
+                # logic: a bar opening beyond the limit fills at the (better)
+                # open.
+                bar_open = float(current_bar.get("o", current_price))
                 exit_price = None
                 reason = None
                 if direction == "short":
                     if current_high >= pos["stop"]:
-                        exit_price, reason = self._apply_slippage("short", pos["stop"]), "stop_loss"
+                        stop_ref = max(pos["stop"], bar_open)
+                        exit_price, reason = self._apply_slippage("short", stop_ref), "stop_loss"
                     elif current_low <= pos["tp"]:
-                        exit_price, reason = self._apply_slippage("short", pos["tp"]), "take_profit"
+                        tp_ref = min(pos["tp"], bar_open)
+                        exit_price, reason = self._apply_slippage("short", tp_ref), "take_profit"
                 else:
                     if current_low <= pos["stop"]:
-                        exit_price, reason = self._apply_slippage("long", pos["stop"]), "stop_loss"
+                        stop_ref = min(pos["stop"], bar_open)
+                        exit_price, reason = self._apply_slippage("long", stop_ref), "stop_loss"
                     elif current_high >= pos["tp"]:
-                        exit_price, reason = self._apply_slippage("long", pos["tp"]), "take_profit"
+                        tp_ref = max(pos["tp"], bar_open)
+                        exit_price, reason = self._apply_slippage("long", tp_ref), "take_profit"
 
                 if exit_price is not None:
                     capital += self._book_exit(pos, sym, exit_price, reason, ctime, trades, strategies)
@@ -487,21 +527,37 @@ class Backtester:
                         continue
 
                     direction = "short" if signal.direction == SignalDirection.SHORT else "long"
-                    if direction == "short":
-                        entry_price = current_price * (1 - self.slippage_pct)
+                    if (self.config.backtest.entry_fill_next_open
+                            and trade_symbol == sym):
+                        # Honest timing: defer the fill to the next bar's open
+                        # (see BacktestConfig.entry_fill_next_open). The order
+                        # is committed now — daily entry budget and strategy
+                        # state advance exactly as on an immediate fill.
+                        pending_entries[trade_symbol] = {
+                            "signal_idx": idx,
+                            "direction": direction,
+                            "stop": signal.stop_loss,
+                            "tp": signal.take_profit,
+                            "qty": size.shares,
+                            "strategy": strategy.name,
+                            "reason": signal.reason,
+                        }
                     else:
-                        entry_price = current_price * (1 + self.slippage_pct)
+                        if direction == "short":
+                            entry_price = current_price * (1 - self.slippage_pct)
+                        else:
+                            entry_price = current_price * (1 + self.slippage_pct)
 
-                    open_positions[trade_symbol] = {
-                        "entry": entry_price,
-                        "stop": signal.stop_loss,
-                        "tp": signal.take_profit,
-                        "qty": size.shares,
-                        "strategy": strategy.name,
-                        "entry_time": ctime,
-                        "reason": signal.reason,
-                        "direction": direction,
-                    }
+                        open_positions[trade_symbol] = {
+                            "entry": entry_price,
+                            "stop": signal.stop_loss,
+                            "tp": signal.take_profit,
+                            "qty": size.shares,
+                            "strategy": strategy.name,
+                            "entry_time": ctime,
+                            "reason": signal.reason,
+                            "direction": direction,
+                        }
                     strategy.on_fill(trade_symbol, signal)
                     risk.record_entry()
                     break

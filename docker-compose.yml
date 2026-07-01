@@ -6,6 +6,20 @@ services:
     image: trader:latest
     container_name: trader
     restart: always
+    # Hardening: the entrypoint needs root only to chown the bind mounts and
+    # drop to 'trader' via gosu, so grant exactly the capabilities that path
+    # uses and block any privilege re-escalation afterwards. If a future
+    # entrypoint change crashes on a permission error, re-check this list.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
     env_file:
       - .env
     volumes:

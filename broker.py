@@ -12,8 +12,20 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from .config import BrokerConfig
+from .universe import valid_symbol
 
 logger = logging.getLogger(__name__)
+
+
+def _guard_symbol(symbol: object, where: str) -> bool:
+    """Defense-in-depth: symbols are interpolated into REST URL paths, so any
+    string that reaches the broker from an external source (news tags, pool
+    files, snapshot keys) must be ticker-shaped. Returns False (and logs) for
+    anything else so the caller can bail out."""
+    if valid_symbol(symbol):
+        return True
+    logger.error(f"{where}: rejecting invalid symbol {symbol!r}")
+    return False
 
 
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
@@ -132,9 +144,13 @@ class AlpacaBroker:
         return result if isinstance(result, list) else []
 
     def get_position(self, symbol: str) -> Optional[Dict]:
+        if not _guard_symbol(symbol, "get_position"):
+            return None
         return self._request("GET", f"{self.base_url}/v2/positions/{symbol}")
 
     def close_position(self, symbol: str, qty: Optional[int] = None) -> Optional[Dict]:
+        if not _guard_symbol(symbol, "close_position"):
+            return None
         params = {}
         if qty is not None:
             params["qty"] = str(qty)
@@ -161,6 +177,8 @@ class AlpacaBroker:
         stop_price: Optional[float] = None,
         client_order_id: Optional[str] = None,
     ) -> Optional[Dict]:
+        if not _guard_symbol(symbol, "submit_order"):
+            return None
         body: Dict[str, Any] = {
             "symbol": symbol,
             "qty": str(qty),
@@ -190,6 +208,8 @@ class AlpacaBroker:
         stop_loss_limit_price: Optional[float] = None,
     ) -> Optional[Dict]:
         """Submit an OCO bracket order (entry + take profit + stop loss)."""
+        if not _guard_symbol(symbol, "submit_bracket_order"):
+            return None
         body: Dict[str, Any] = {
             "symbol": symbol,
             "qty": str(qty),
@@ -233,6 +253,14 @@ class AlpacaBroker:
 
     def cancel_order(self, order_id: str) -> Optional[Dict]:
         return self._request("DELETE", f"{self.base_url}/v2/orders/{order_id}")
+
+    def get_order(self, order_id: str) -> Optional[Dict]:
+        """Fetch one order by id — used to reconcile the journal's entry price
+        to the REAL fill (filled_avg_price) instead of the signal price, the
+        same honesty the exit side already gets via last_filled_exit()."""
+        if not order_id or not isinstance(order_id, str):
+            return None
+        return self._request("GET", f"{self.base_url}/v2/orders/{order_id}")
 
     def cancel_all_orders(self) -> Optional[Any]:
         return self._request("DELETE", f"{self.base_url}/v2/orders")
@@ -312,6 +340,8 @@ class AlpacaBroker:
         start/end: ISO 8601 datetime strings
         Returns list of bar dicts with keys: t, o, h, l, c, v, n, vw
         """
+        if not _guard_symbol(symbol, "get_bars"):
+            return []
         url = f"{self.data_url}/v2/stocks/{symbol}/bars"
         params: Dict[str, Any] = {
             "timeframe": timeframe,
@@ -368,6 +398,8 @@ class AlpacaBroker:
     # ------------------------------------------------------------------
 
     def get_snapshot(self, symbol: str) -> Optional[Dict]:
+        if not _guard_symbol(symbol, "get_snapshot"):
+            return None
         url = f"{self.data_url}/v2/stocks/{symbol}/snapshot"
         return self._request("GET", url, params={"feed": self.config.data_feed})
 
@@ -419,10 +451,14 @@ class AlpacaBroker:
     # ------------------------------------------------------------------
 
     def get_latest_quote(self, symbol: str) -> Optional[Dict]:
+        if not _guard_symbol(symbol, "get_latest_quote"):
+            return None
         url = f"{self.data_url}/v2/stocks/{symbol}/quotes/latest"
         return self._request("GET", url, params={"feed": self.config.data_feed})
 
     def get_latest_trade(self, symbol: str) -> Optional[Dict]:
+        if not _guard_symbol(symbol, "get_latest_trade"):
+            return None
         url = f"{self.data_url}/v2/stocks/{symbol}/trades/latest"
         return self._request("GET", url, params={"feed": self.config.data_feed})
 

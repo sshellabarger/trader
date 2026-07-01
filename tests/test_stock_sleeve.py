@@ -118,7 +118,9 @@ def make_engine(broker=None, **strategy_overrides):
 def test_sleeve_off_by_default():
     engine = make_engine()
     assert engine.sleeve_enabled is False
-    assert engine.symbols == ["TQQQ", "SQQQ"]          # index legs, unchanged
+    # Index mode, unchanged. Bull leg only: the SQQQ bear leg defaults OFF as
+    # of 2026-07-01 (negative expectancy in every coherent slice).
+    assert engine.symbols == ["TQQQ"]
     assert engine.config.strategy.orb_max_entries_per_day == 1
 
 

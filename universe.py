@@ -20,8 +20,26 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+
+# ---------------------------------------------------------------------------
+# Symbol validation — the one ticker shape accepted at every trust boundary
+# where externally-sourced symbol strings enter the system (news feed tags,
+# pool files, snapshot keys). Those strings flow into REST URL paths, journal
+# CSVs and log lines, so anything ticker-unlike is dropped at the door.
+# Allows NYSE/NASDAQ styles incl. BRK.B and BF-B.
+# ---------------------------------------------------------------------------
+
+_SYMBOL_RE = re.compile(r"[A-Z][A-Z0-9.\-]{0,9}")
+
+
+def valid_symbol(sym: object) -> bool:
+    """True if `sym` is a plausible US equity/ETF ticker (defense-in-depth
+    filter for externally-sourced symbol strings)."""
+    return isinstance(sym, str) and bool(_SYMBOL_RE.fullmatch(sym))
 
 
 # ---------------------------------------------------------------------------

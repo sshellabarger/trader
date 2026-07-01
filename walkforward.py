@@ -21,6 +21,7 @@ import csv
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -72,11 +73,14 @@ class WalkForwardValidator:
         train_days: int = 40,  # ~2 months of trading days
         test_days: int = 20,   # ~1 month of trading days
         step_days: int = 20,   # slide forward by ~1 month
+        label: str = "",       # tag for the summary filename (scenario name)
     ):
         self.config = config
         self.train_days = train_days
         self.test_days = test_days
         self.step_days = step_days
+        # Sanitized: the label lands in a filename.
+        self.label = re.sub(r"[^A-Za-z0-9._-]+", "_", label or "")
         self.backtester = Backtester(config)
 
     def run(
@@ -300,7 +304,12 @@ class WalkForwardValidator:
                 detail["test"]["by_strategy"] = w.test_result.by_strategy
             summary["window_details"].append(detail)
 
-        filepath = os.path.join(out_dir, "walkforward_summary.json")
+        # Per-scenario filename: the summary used to be OVERWRITTEN by every
+        # run, so the numbers a decision rested on survived only in the
+        # console. With a label each scenario keeps its own file.
+        name = (f"walkforward_summary_{self.label}.json" if self.label
+                else "walkforward_summary.json")
+        filepath = os.path.join(out_dir, name)
         with open(filepath, "w") as f:
             json.dump(summary, f, indent=2, default=str)
         logger.info(f"Walk-forward results saved: {filepath}")

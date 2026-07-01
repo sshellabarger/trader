@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Journals and pool files contain full account equity, config snapshots and
+# every trade; keep everything the bot writes owner-only. Host inspection of
+# the bind-mounted trade_logs/ then needs sudo (or membership in uid 10001).
+umask 077
+
 # The trade journal is written to a bind-mounted host directory. Docker creates
 # that directory as root the first time it is mounted, and the unprivileged
 # 'trader' user the bot runs as cannot write to a root-owned directory. So we

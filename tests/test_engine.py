@@ -505,25 +505,31 @@ def test_last_filled_exit_ignores_stale_fill_before_entry(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Trading-symbol set — the bear (SQQQ) leg is ON by default as of 2026-06-21
-# (enabled at user request). The 2026-06-13 diagnosis that it had negative
-# expectancy (TQQQ-only profile was +29%/PF 1.64/Sharpe 2.75) still stands and
-# was not invalidated, so the toggle must keep working in both directions.
+# Trading-symbol set — the bear (SQQQ) leg is OFF by default as of 2026-07-01
+# (user decision after the honest review: every coherent SQQQ slice tested
+# negative and the walk-forward showed the combined system at PF 0.99 OOS).
+# The toggle must keep working in both directions so the leg can be re-enabled
+# if an honest out-of-sample backtest ever validates it.
 # --------------------------------------------------------------------------
 
-def test_default_trading_symbols_include_bear_leg():
+def test_default_trading_symbols_exclude_bear_leg():
     cfg = Config()
-    assert cfg.get_trading_symbols() == ["TQQQ", "SQQQ"]   # bear leg on by default
+    assert cfg.get_trading_symbols() == ["TQQQ"]           # bear leg off by default
 
 
-def test_bear_leg_can_be_disabled():
+def test_bear_leg_can_be_enabled():
     cfg = Config()
-    cfg.strategy.orb_trade_both_directions = False
-    assert cfg.get_trading_symbols() == ["TQQQ"]
+    cfg.strategy.orb_trade_both_directions = True
+    assert cfg.get_trading_symbols() == ["TQQQ", "SQQQ"]
 
 
-def test_engine_trades_both_legs_by_default():
+def test_engine_trades_bull_leg_only_by_default():
     engine = make_engine(_broker())
+    assert engine.symbols == ["TQQQ"]
+
+
+def test_engine_trades_both_legs_when_enabled():
+    engine = make_engine(_broker(), orb_trade_both_directions=True)
     assert engine.symbols == ["TQQQ", "SQQQ"]
 
 

@@ -26,6 +26,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import requests
 
+from .universe import valid_symbol
+
 logger = logging.getLogger(__name__)
 
 ALPACA_NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
@@ -91,7 +93,13 @@ def _parse_news_items(items: List[Dict],
         url = it.get("url") or ""
         published = it.get("created_at") or it.get("updated_at") or ""
         for sym in (it.get("symbols") or []):
-            su = sym.upper()
+            su = str(sym).strip().upper()
+            if not valid_symbol(su):
+                # Trust boundary: feed-supplied tags flow into the scan
+                # universe, REST URL paths and journal CSVs — drop anything
+                # that isn't shaped like a ticker.
+                logger.debug(f"news: dropping invalid symbol tag {sym!r}")
+                continue
             if want is None or su in want:
                 out.append(NewsArticle(su, headline, summary, source, url, published))
     return out

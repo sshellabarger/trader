@@ -208,9 +208,18 @@ def load_pool_symbols(path: str) -> List[str]:
         return []
     if text[:1] in ("{", "["):
         try:
+            from .universe import valid_symbol
             data = json.loads(text)
             syms = data.get("symbols", []) if isinstance(data, dict) else data
-            return [str(s).strip().upper() for s in syms if str(s).strip()]
+            cleaned = [str(s).strip().upper() for s in syms if str(s).strip()]
+            # Trust boundary: the pool file is hand-editable on the host and
+            # its entries flow into REST URL paths — keep only ticker-shaped
+            # strings.
+            kept = [s for s in cleaned if valid_symbol(s)]
+            dropped = [s for s in cleaned if not valid_symbol(s)]
+            if dropped:
+                logger.warning(f"pool file {path}: dropped invalid symbols {dropped!r}")
+            return kept
         except (ValueError, AttributeError) as exc:
             logger.warning(f"pool file parse failed ({path}): {exc}")
             return []

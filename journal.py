@@ -138,6 +138,36 @@ class TradeJournal:
                      f"[{strategy}] SL={stop_loss:.2f} TP={take_profit:.2f}")
         return record
 
+    def update_entry_fill(self, symbol: str, fill_price: float) -> None:
+        """Reconcile an open trade's entry to the broker's REAL fill price.
+
+        The engine journals the SIGNAL price at submit time (the only price it
+        has); once the bracket parent reports filled_avg_price this replaces
+        it, so P&L, R:R and any slippage calibration built on the journal use
+        the price the account actually paid. Exits already get this honesty
+        via last_filled_exit(); entries were the blind spot. Logs the realized
+        entry slippage so live fills can be compared to the backtest's
+        slippage_bps assumption.
+        """
+        record = self.open_trades.get(symbol)
+        if record is None or not fill_price or fill_price <= 0:
+            return
+        signal_price = record.entry_price
+        if abs(fill_price - signal_price) < 1e-9:
+            return
+        record.entry_price = fill_price
+        risk = abs(fill_price - record.stop_loss)
+        reward = abs(record.take_profit - fill_price)
+        record.risk_reward_target = reward / risk if risk > 0 else None
+        if signal_price > 0:
+            adverse_bps = (fill_price - signal_price) / signal_price * 10_000
+            if record.direction != "long":
+                adverse_bps = -adverse_bps
+            logger.info(
+                f"JOURNAL ENTRY FILL: {symbol} @ {fill_price:.2f} "
+                f"(signal {signal_price:.2f}, slippage {adverse_bps:+.1f} bps)"
+            )
+
     def close_trade(
         self, symbol: str, exit_price: float, exit_reason: str
     ) -> Optional[TradeRecord]:

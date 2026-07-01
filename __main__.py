@@ -88,6 +88,7 @@ def cmd_walkforward(args):
         train_days=args.train_days,
         test_days=args.test_days,
         step_days=args.step_days,
+        label=getattr(args, "label", ""),
     )
     result = wf.run(symbols, start_date=args.start, end_date=args.end)
 
@@ -181,6 +182,9 @@ def main():
     wf_p.add_argument("--train-days", type=int, default=40)
     wf_p.add_argument("--test-days", type=int, default=20)
     wf_p.add_argument("--step-days", type=int, default=20)
+    wf_p.add_argument("--label", default="", help=(
+        "Scenario tag for the summary file (walkforward_summary_<label>.json) "
+        "so runs stop overwriting each other"))
 
     sc_p = sub.add_parser("screen-universe",
                           help="Build the stock-sleeve pool by liquidity + volatility")

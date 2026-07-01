@@ -1,1 +1,5 @@
-requests>=2.28.0
+# Pinned exact for supply-chain safety: the droplet rebuilds this image on
+# every deploy, and a floating range would silently install whatever PyPI
+# serves that day into a container holding broker credentials. Bump versions
+# deliberately, after a test run.
+requests==2.32.5

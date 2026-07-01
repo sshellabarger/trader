@@ -103,11 +103,14 @@ class StrategyConfig:
     # the bear leg trades exclusively in confirmed bearish regimes, and only
     # once that combination is validated out-of-sample on fresh data.
     #
-    # 2026-06-21: ENABLED at user request to trade the SQQQ long leg. The
-    # 2026-06-13 negative-expectancy finding above still stands and was NOT
-    # invalidated — validate on a fresh backtest before live use, and consider
-    # pairing with orb_require_regime_alignment=True.
-    orb_trade_both_directions: bool = True  # include leveraged_bear in the trading set
+    # 2026-06-21: enabled at user request to trade the SQQQ long leg.
+    # 2026-07-01: DISABLED again, per user decision after the honest review —
+    # the negative-expectancy finding was never invalidated (walk-forward OOS
+    # tested the whole system at PF 0.99, and every coherent SQQQ slice is
+    # negative). Re-enable only after an out-of-sample backtest run with
+    # BACKTEST_ENTRY_FILL_NEXT_OPEN=true and BACKTEST_SLIPPAGE_BPS=10 shows
+    # the leg adds money, ideally paired with orb_require_regime_alignment.
+    orb_trade_both_directions: bool = False  # include leveraged_bear in the trading set
     orb_entry_window_minutes: int = 3  # how long after the range completes an entry is allowed
     orb_min_range_bars: int = 3  # require this many 1-min bars inside the opening range
     orb_profit_target_r: float = 10.0
@@ -333,10 +336,26 @@ class RiskConfig:
 class BacktestConfig:
     initial_capital: float = 100_000.0
     commission_per_share: float = 0.0035
+    # Per-side slippage. 2 bps models a resting-liquidity fill; live entries
+    # are MARKET orders sent from a 30s poll loop, so for go/no-go decisions
+    # stress the result at 5-10 bps (BACKTEST_SLIPPAGE_BPS=10). A strategy
+    # whose edge disappears at 10 bps never had one.
     slippage_bps: float = 2.0
     # Buying power as a multiple of equity, to mirror the live margin account
     # (Alpaca paper RegT ~2x). The old hardcoded 0.5 under-sized vs live.
     margin_multiple: float = 2.0
+    # Honest entry timing: fill a signal at the NEXT bar's open instead of the
+    # signal bar's close. The live bot sees a completed bar and then sends a
+    # market order, so next-open is the earliest price it can actually get;
+    # same-bar-close fills flatter every backtest by ~0.5-1.5 min of drift on
+    # a 3x ETF. Default off to keep comparability with historical runs — turn
+    # on (BACKTEST_ENTRY_FILL_NEXT_OPEN=true) for any decision-grade result.
+    entry_fill_next_open: bool = False
+
+    def __post_init__(self):
+        self.slippage_bps = _env_float("BACKTEST_SLIPPAGE_BPS", self.slippage_bps)
+        self.entry_fill_next_open = _env_bool(
+            "BACKTEST_ENTRY_FILL_NEXT_OPEN", self.entry_fill_next_open)
 
 
 @dataclass

@@ -2,7 +2,11 @@
 # Paper by default; going live is ONLY an env change (live keys + live base URL).
 # This repo's files ARE the `trader` package, so the image copies them into
 # /app/trader and runs `python -m trader` from /app.
-FROM python:3.11-slim
+# Pinned to the bookworm variant so a Debian base-image jump can't arrive
+# silently with a routine rebuild. For stricter supply-chain pinning, replace
+# with an exact digest: docker pull python:3.11-slim-bookworm && docker images
+# --digests, then FROM python:3.11-slim-bookworm@sha256:<digest>.
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
