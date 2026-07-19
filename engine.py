@@ -486,12 +486,32 @@ class Engine:
             self._sleeve_scanned_day = today
             self._safe_note_picks([])
             return
+        long_bias = self.config.strategy.stock_sleeve_long_bias
         try:
-            candidates = scan_candidates(self.broker, universe, self.config.scanner)
+            candidates = scan_candidates(self.broker, universe, self.config.scanner,
+                                         long_bias=long_bias)
         except Exception as exc:
             logger.error(f"Stock sleeve scan failed: {exc}", exc_info=True)
             return  # leave today unscanned so the next tick retries
-        picks = candidates[: self.config.strategy.stock_sleeve_max_candidates]
+        n = self.config.strategy.stock_sleeve_max_candidates
+        if long_bias:
+            # The sleeve is LONG-only ORB: a name gapping down a few percent
+            # almost never sets up a long opening-range breakout (the
+            # 07-06→07-17 week: 45 name-days, 1 entry, mostly gap-down picks).
+            # Trade the gap-ups only — fewer names on a red tape is correct —
+            # and diary-note the gap-downs that out-scored an accepted pick so
+            # a thin day stays legible in the daily summary.
+            score = lambda c: abs(c.gap_pct) * c.relative_volume
+            picks = [c for c in candidates if c.gap_pct >= 0][:n]
+            floor = min((score(c) for c in picks), default=0.0)
+            displaced = [c for c in candidates
+                         if c.gap_pct < 0 and (len(picks) < n or score(c) >= floor)]
+            for c in displaced[:n]:
+                self._safe_note_skip(
+                    c.symbol, "gap_down_long_only",
+                    f"gap {c.gap_pct:+.1f}% rvol {c.relative_volume:.1f}")
+        else:
+            picks = candidates[:n]
         self.symbols = [c.symbol for c in picks]
         self._sleeve_scanned_day = today
         self._safe_note_picks(self.symbols)

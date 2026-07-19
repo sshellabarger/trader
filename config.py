@@ -226,6 +226,15 @@ class StrategyConfig:
     # sleeve raises this so several names can break out the same morning.
     orb_max_entries_per_day: int = 1
 
+    # Long-bias the sleeve's morning picks: the sleeve trades LONG opening-range
+    # breakouts only, and a stock that gaps DOWN a few percent almost never sets
+    # up one — the 07-06→07-17 week produced 45 name-days and a single entry
+    # because most picks were gap-downs. When true, the scanner ranks gap-ups
+    # first and the sleeve trades only non-negative gaps (fewer names on a red
+    # tape is the correct long-only behavior). Set STOCK_SLEEVE_LONG_BIAS=false
+    # to restore the old direction-agnostic picks.
+    stock_sleeve_long_bias: bool = True
+
     # ── Stock-sleeve news / catalysts (default OFF) ─────────────────────
     # When on, each morning the sleeve pulls recent MARKET-WIDE news, adds the
     # top catalyst names (most fresh coverage) to the scan pool, and gates
@@ -271,6 +280,8 @@ class StrategyConfig:
             "STOCK_SLEEVE_MAX_POSITION_PCT", self.stock_sleeve_max_position_pct)
         self.orb_max_entries_per_day = _env_int(
             "ORB_MAX_ENTRIES_PER_DAY", self.orb_max_entries_per_day)
+        self.stock_sleeve_long_bias = _env_bool(
+            "STOCK_SLEEVE_LONG_BIAS", self.stock_sleeve_long_bias)
 
         # Stock-sleeve news layer (default off — see the field comments above).
         self.stock_sleeve_news_enabled = _env_bool(

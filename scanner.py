@@ -45,10 +45,16 @@ def scan_candidates(
     broker: AlpacaBroker,
     universe: List[str],
     config: ScannerConfig,
+    long_bias: bool = False,
 ) -> List[Candidate]:
     """
     Scan a universe of symbols and return sorted candidates.
     Uses batch snapshots for efficiency.
+
+    With long_bias=True, gap-UP names rank ahead of gap-downs (score order
+    within each group). This matters because the trim below caps the list:
+    a long-only consumer would otherwise lose a tradeable gap-up that scored
+    just below five untradeable gap-downs.
     """
     if not universe:
         logger.warning("Empty universe — nothing to scan")
@@ -70,8 +76,13 @@ def scan_candidates(
         except Exception as exc:
             logger.debug(f"Error evaluating {symbol}: {exc}")
 
-    # Sort by absolute gap then relative volume (best candidates first)
-    candidates.sort(key=lambda c: (abs(c.gap_pct) * c.relative_volume), reverse=True)
+    # Sort by absolute gap then relative volume (best candidates first).
+    # long_bias additionally ranks all gap-ups ahead of all gap-downs.
+    if long_bias:
+        candidates.sort(
+            key=lambda c: (c.gap_pct < 0, -(abs(c.gap_pct) * c.relative_volume)))
+    else:
+        candidates.sort(key=lambda c: (abs(c.gap_pct) * c.relative_volume), reverse=True)
 
     # Trim to max candidates
     candidates = candidates[: config.max_candidates]
