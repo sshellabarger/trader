@@ -158,9 +158,28 @@ class AlpacaBroker:
 
     def close_all_positions(self, cancel_orders: bool = False) -> Optional[Any]:
         """Liquidate all positions. With cancel_orders=True, Alpaca cancels all
-        open orders first so held shares are freed for the liquidating order."""
+        open orders first so held shares are freed for the liquidating order.
+
+        Alpaca answers with a 207 multi-status body: one entry per position,
+        each with its own HTTP status. An entry >= 300 is a liquidation that
+        did NOT happen (e.g. rejected because the shares were still held for
+        an order whose cancellation hadn't settled — the 2026-07-09 COIN
+        overnight). Surface those loudly; the engine's closing-window sweep
+        is what actually re-closes them."""
         params = {"cancel_orders": "true"} if cancel_orders else None
-        return self._request("DELETE", f"{self.base_url}/v2/positions", params=params)
+        result = self._request("DELETE", f"{self.base_url}/v2/positions", params=params)
+        if isinstance(result, list):
+            for entry in result:
+                if not isinstance(entry, dict):
+                    continue
+                status = entry.get("status")
+                if isinstance(status, int) and status >= 300:
+                    logger.error(
+                        f"close_all_positions: liquidation FAILED for "
+                        f"{entry.get('symbol', '?')} (status {status}) — "
+                        f"position is still open"
+                    )
+        return result
 
     # ------------------------------------------------------------------
     # Orders

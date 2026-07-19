@@ -198,6 +198,10 @@ class Engine:
         # next tick(s) rather than assumed complete inline.
         self._check_exits(reconcile_only=closing)
         if closing:
+            # The flatten above is fire-and-forget; verify it actually emptied
+            # the book and re-close anything that survived (2026-07-09: COIN's
+            # liquidation was rejected and 159 shares sat overnight naked).
+            self._sweep_unflattened()
             return
 
         # Retry any committed exit whose close hasn't confirmed yet, so a
@@ -895,13 +899,50 @@ class Engine:
         """Issue an EOD account flatten (cancel all orders + liquidate). Async:
         positions don't vanish immediately, so journaling is left to
         _reconcile_vanished_position on this and subsequent ticks, which books
-        each close at its real fill price. Issued once per day."""
+        each close at its real fill price. Issued once per day; completion is
+        verified every closing tick by _sweep_unflattened."""
         if self.config.dry_run or self._flatten_requested:
             return
         if self.broker.get_positions():
             logger.info(f"Flattening all positions: {reason}")
             self.broker.close_all_positions(cancel_orders=True)
             self._flatten_requested = True
+
+    def _sweep_unflattened(self):
+        """Verify the EOD flatten completed; re-close anything that survived.
+
+        close_all_positions(cancel_orders=True) cancels the working orders and
+        then submits one liquidation per position — and any of those
+        liquidations can be individually rejected, e.g. when the shares are
+        still held for a bracket leg whose cancellation hasn't settled. On
+        2026-07-09 exactly that happened: both COIN bracket legs were
+        cancelled at 15:55 ET but no liquidation filled, so 159 shares rode
+        overnight with no stop and were only closed by the NEXT day's flatten
+        (profitably, by luck). Because _flatten_all is once-per-day by design,
+        nothing retried. This sweep runs on every closing-window tick after
+        the flatten was issued and re-issues a close for each surviving
+        position, so a rejection costs one tick interval instead of a night.
+        Journaling still flows through _reconcile_vanished_position, which
+        books the close at its real fill price once the position leaves the
+        book."""
+        if self.config.dry_run or not self._flatten_requested:
+            return
+        for pos in self.broker.get_positions():
+            sym = str(pos.get("symbol", "") or "")
+            if not sym:
+                continue
+            logger.error(
+                f"EOD flatten incomplete: {sym} is still on the book after "
+                f"close_all_positions — re-issuing close"
+            )
+            self._safe_note_skip(sym, "eod_flatten_retry",
+                                 "position survived close_all; re-closed")
+            self.broker.cancel_orders_for_symbol(sym)
+            self._wait_orders_cleared(sym)
+            if not self.broker.close_position(sym):
+                logger.error(
+                    f"EOD re-close REJECTED for {sym}; will retry next tick"
+                )
 
     def _get_position_infos(self) -> List[PositionInfo]:
         positions = self.broker.get_positions()
@@ -933,6 +974,9 @@ class Engine:
                     self._check_exits(reconcile_only=True)
                     if not self.journal.open_trades:
                         break
+                    # Re-close anything whose liquidation was rejected rather
+                    # than waiting on a fill that was never submitted.
+                    self._sweep_unflattened()
                     time.sleep(1.5)
             else:
                 self._check_exits(reconcile_only=True)
