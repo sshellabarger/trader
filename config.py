@@ -126,6 +126,22 @@ class StrategyConfig:
     # Set max=0 to disable the upper cap.
     orb_min_range_pct: float = 0.5
     orb_max_range_pct: float = 1.2
+    # Optional ATR-scaled range band (default OFF = the fixed % band above).
+    # The fixed 0.5-1.2% band was calibrated on TQQQ, a 3x ETF whose opening
+    # range in % terms is ~3x the underlying's. Applied to single stocks it is
+    # mis-scaled both ways: mega-caps (AAPL) rarely print a 0.5% opening range,
+    # while high-beta gappers (MSTR, SMCI) blow past 1.2% on exactly the
+    # mornings the scanner picks them. When enabled, the band becomes
+    # [orb_range_atr_lo, orb_range_atr_hi] x the symbol's DAILY ATR% (14-day
+    # ATR as % of price, supplied via indicators["daily_atr_pct"] with no
+    # lookahead). If daily_atr_pct is absent the fixed band applies (fail-safe),
+    # so enabling this without wiring the indicator changes nothing. The
+    # 0.15-0.45 defaults reproduce the TQQQ band at TQQQ's ~2.7% daily ATR;
+    # they are a starting grid for the sleeve replay sweep, not a validated
+    # setting.
+    orb_range_band_atr: bool = False
+    orb_range_atr_lo: float = 0.15
+    orb_range_atr_hi: float = 0.45
     # Optional: only take an ORB breakout that agrees with the daily regime
     # (long the bull ETF only when QQQ is bullish, the bear ETF only when
     # bearish). Default off — kept inert until validated out-of-sample.
@@ -262,6 +278,23 @@ class StrategyConfig:
         self.news_enabled = _env_bool("NEWS_ENABLED", self.news_enabled)
         self.orb_overnight_gap_min_pct = _env_float(
             "ORB_OVERNIGHT_GAP_MIN_PCT", self.orb_overnight_gap_min_pct)
+
+        # ORB gate knobs (2026-07-22): the two most binding entry gates — the
+        # opening-range size band and the entry window — were previously
+        # hardcoded, so tuning them on the droplet required a code change and
+        # rebuild. Env-tunable now; code defaults unchanged.
+        self.orb_min_range_pct = _env_float(
+            "ORB_MIN_RANGE_PCT", self.orb_min_range_pct)
+        self.orb_max_range_pct = _env_float(
+            "ORB_MAX_RANGE_PCT", self.orb_max_range_pct)
+        self.orb_entry_window_minutes = _env_int(
+            "ORB_ENTRY_WINDOW_MINUTES", self.orb_entry_window_minutes)
+        self.orb_range_band_atr = _env_bool(
+            "ORB_RANGE_BAND_ATR", self.orb_range_band_atr)
+        self.orb_range_atr_lo = _env_float(
+            "ORB_RANGE_ATR_LO", self.orb_range_atr_lo)
+        self.orb_range_atr_hi = _env_float(
+            "ORB_RANGE_ATR_HI", self.orb_range_atr_hi)
 
         # Stock sleeve (default off — see the field comments above).
         self.stock_sleeve_enabled = _env_bool(

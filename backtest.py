@@ -305,13 +305,20 @@ class Backtester:
         capital: float,
         open_positions: Dict[str, Dict],
         overnight_gap_pct: Optional[float] = None,
+        extra_indicators: Optional[Dict[str, Dict]] = None,
     ) -> Tuple[float, List[TradeRecord]]:
         """Simulate one session across all traded symbols on a shared timeline.
 
         Each symbol is evaluated against its own bars; positions, capital, and
         the daily trade counter are shared. EOD entry-cutoff and force-flatten
         mirror the live engine (no_trade_last_minutes / eod_minutes_before_close).
+
+        extra_indicators: optional per-symbol dict merged into the computed
+        indicators at every evaluation (e.g. {"NVDA": {"daily_atr_pct": 3.1}}),
+        for day-level context the intraday bars can't provide. Values are
+        constant within the day, so merging them each bar adds no lookahead.
         """
+        extra_indicators = extra_indicators or {}
         trades: List[TradeRecord] = []
         warmup = 5  # bars before a symbol is eligible (range + indicators)
         bp = capital * self.config.backtest.margin_multiple  # mirror live buying power
@@ -435,6 +442,7 @@ class Backtester:
 
                 # Strategy-driven exit
                 indicators = compute_indicators(bars_so_far)
+                indicators.update(extra_indicators.get(sym, {}))
                 ex_candidate = Candidate(
                     symbol=sym, price=current_price, prev_close=pos["entry"],
                     gap_pct=0, change_pct=0, volume=0, avg_volume=1,
@@ -469,6 +477,7 @@ class Backtester:
             # Same overnight gap for every symbol/bar this day; the ORB gate
             # reads it only when orb_require_overnight_alignment is enabled.
             indicators["overnight_gap_pct"] = overnight_gap_pct
+            indicators.update(extra_indicators.get(sym, {}))
             day_open = float(bars[0]["o"])
             candidate = Candidate(
                 symbol=sym, price=current_price,

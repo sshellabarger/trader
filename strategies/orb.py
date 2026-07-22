@@ -148,11 +148,26 @@ class ORBStrategy(BaseStrategy):
         # that aren't real breakouts and (b) oversized, high-volatility ranges
         # that whipsaw through the range-low stop. See StrategyConfig for the
         # H1-2025 evidence behind the 0.5-1.0% default band.
+        #
+        # With orb_range_band_atr the band scales to the symbol's own daily
+        # volatility: [atr_lo, atr_hi] x daily ATR% (indicators["daily_atr_pct"],
+        # computed from PRIOR days only). A fixed % band calibrated on one
+        # instrument (TQQQ) is mis-scaled for a mixed stock basket; the ATR
+        # band asks the same question ("is this opening range normal-sized for
+        # THIS symbol?") in each symbol's own units. Fail-safe: if the daily
+        # ATR% wasn't supplied, the fixed band applies unchanged.
         if entry_price > 0:
             range_pct = range_size / entry_price * 100.0
-            if range_pct < self.sc.orb_min_range_pct:
+            band_lo = self.sc.orb_min_range_pct
+            band_hi = self.sc.orb_max_range_pct
+            if self.sc.orb_range_band_atr:
+                daily_atr = indicators.get("daily_atr_pct")
+                if daily_atr is not None and daily_atr > 0:
+                    band_lo = self.sc.orb_range_atr_lo * daily_atr
+                    band_hi = self.sc.orb_range_atr_hi * daily_atr
+            if range_pct < band_lo:
                 return None
-            if self.sc.orb_max_range_pct > 0 and range_pct > self.sc.orb_max_range_pct:
+            if band_hi > 0 and range_pct > band_hi:
                 return None
 
         # Optional regime alignment: don't fight the daily trend. Only buy the

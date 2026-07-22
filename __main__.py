@@ -76,6 +76,75 @@ def cmd_backtest(args):
         print(f"  [{strat}] {stats['trades']} trades, {stats['win_rate']:.0f}% win, ${stats['pnl']:+,.2f}")
 
 
+def cmd_sleeve_backtest(args):
+    """Replay the scanner-driven stock sleeve over history (see
+    sleeve_backtest.py). Decision-grade runs should set
+    BACKTEST_ENTRY_FILL_NEXT_OPEN=true and BACKTEST_SLIPPAGE_BPS=10."""
+    from .sleeve_backtest import SleeveBacktester, run_sweep
+
+    config = Config()
+    config.log_level = args.log_level
+    setup_logging(config.log_level)
+
+    st = config.strategy
+    if args.band:
+        try:
+            lo, hi = (float(x) for x in args.band.split(","))
+        except ValueError:
+            print(f"--band expects 'lo,hi' (e.g. 0.5,1.2), got {args.band!r}")
+            return
+        st.orb_min_range_pct, st.orb_max_range_pct = lo, hi
+    if args.atr_band:
+        st.orb_range_band_atr = True
+    if args.atr_lo is not None:
+        st.orb_range_atr_lo = args.atr_lo
+    if args.atr_hi is not None:
+        st.orb_range_atr_hi = args.atr_hi
+    if args.entry_window is not None:
+        st.orb_entry_window_minutes = args.entry_window
+    if args.candidates is not None:
+        # Both trims, mirroring the live two-stage behavior (scanner trims to
+        # ScannerConfig.max_candidates BEFORE the sleeve's top-N).
+        config.scanner.max_candidates = args.candidates
+        st.stock_sleeve_max_candidates = args.candidates
+
+    if not (config.backtest.entry_fill_next_open
+            and config.backtest.slippage_bps >= 10):
+        print("NOTE: honesty knobs not fully on "
+              f"(next_open_fill={config.backtest.entry_fill_next_open}, "
+              f"slippage={config.backtest.slippage_bps}bps). Fine for exploring; "
+              "decision-grade runs want BACKTEST_ENTRY_FILL_NEXT_OPEN=true "
+              "BACKTEST_SLIPPAGE_BPS=10.")
+
+    bt = SleeveBacktester(config, cache_dir=args.cache_dir,
+                          rvol_mode=args.rvol, offline=args.offline)
+
+    if args.calibrate:
+        bt.calibrate(args.calibrate)
+        return
+
+    if args.fetch or args.fetch_only:
+        bt.prefetch(args.start, args.end)
+        if args.fetch_only:
+            return
+
+    if args.sweep:
+        run_sweep(args.start, args.end, args.train_end, args.cache_dir,
+                  args.rvol, args.offline, label=args.sleeve_label)
+        return
+
+    result = bt.run_sleeve(args.start, args.end, label=args.sleeve_label)
+    print(f"\n{'='*50}")
+    print(f"SLEEVE REPLAY: {args.start} -> {args.end}")
+    print(f"  Sessions: {len(bt.day_log)}  with picks: "
+          f"{sum(1 for d in bt.day_log if d['picks'])}")
+    print(f"  Return: {result.total_return_pct:+.2f}%  (${result.total_pnl:+,.2f})")
+    print(f"  Trades: {result.total_trades}  Win rate: {result.win_rate:.1f}%  "
+          f"Trades/day: {result.trades_per_day}")
+    print(f"  Profit factor: {result.profit_factor:.2f}  Sharpe: {result.sharpe_ratio:.2f}")
+    print(f"  Max drawdown: {result.max_drawdown_pct:.2f}%")
+
+
 def cmd_walkforward(args):
     config = Config()
     config.log_level = args.log_level
@@ -186,6 +255,42 @@ def main():
         "Scenario tag for the summary file (walkforward_summary_<label>.json) "
         "so runs stop overwriting each other"))
 
+    sb_p = sub.add_parser("sleeve-backtest",
+                          help="Replay the scanner-driven stock sleeve on history")
+    sb_p.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
+    sb_p.add_argument("--end", required=True, help="End date YYYY-MM-DD")
+    sb_p.add_argument("--fetch", action="store_true",
+                      help="prefetch daily + premarket caches before replaying")
+    sb_p.add_argument("--fetch-only", action="store_true",
+                      help="prefetch caches and exit (no replay)")
+    sb_p.add_argument("--offline", action="store_true",
+                      help="never touch the network; cache misses are skipped+counted")
+    sb_p.add_argument("--rvol", choices=["premarket", "off"], default="premarket",
+                      help="relative-volume source for the scanner sim "
+                           "(premarket = reconstruct from 4:00-9:30 bars; off = rank by |gap| only)")
+    sb_p.add_argument("--cache-dir", default="data/sleeve_cache")
+    sb_p.add_argument("--band", default="",
+                      help="fixed range band as 'lo,hi' in %% of price (hi=0 uncaps)")
+    sb_p.add_argument("--atr-band", action="store_true",
+                      help="use the ATR-scaled range band instead of the fixed %% band")
+    sb_p.add_argument("--atr-lo", type=float, default=None,
+                      help="ATR band lower multiple (default 0.15)")
+    sb_p.add_argument("--atr-hi", type=float, default=None,
+                      help="ATR band upper multiple (default 0.45)")
+    sb_p.add_argument("--entry-window", type=int, default=None,
+                      help="ORB entry window minutes (live default 3)")
+    sb_p.add_argument("--candidates", type=int, default=None,
+                      help="picks per day (sets scanner AND sleeve trims)")
+    sb_p.add_argument("--sweep", action="store_true",
+                      help="run the band x entry-window grid with a train/test split")
+    sb_p.add_argument("--train-end", default=None,
+                      help="last day of the sweep's train segment (default: 70%% split)")
+    sb_p.add_argument("--calibrate", default="",
+                      help="compare sim picks vs live journal summaries in this dir "
+                           "(e.g. trade_logs), then exit")
+    sb_p.add_argument("--sleeve-label", default="",
+                      help="tag for output filenames in backtest_results/")
+
     sc_p = sub.add_parser("screen-universe",
                           help="Build the stock-sleeve pool by liquidity + volatility")
     sc_p.add_argument("--out", default="data/pool.json", help="output pool file")
@@ -211,6 +316,8 @@ def main():
         cmd_backtest(args)
     elif args.command == "walkforward":
         cmd_walkforward(args)
+    elif args.command == "sleeve-backtest":
+        cmd_sleeve_backtest(args)
     elif args.command == "screen-universe":
         cmd_screen(args)
     else:
