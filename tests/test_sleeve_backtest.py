@@ -175,34 +175,61 @@ def test_simulate_scan_filters_ranking_and_long_bias(tmp_path):
     assert displaced2 == []
 
 
-def test_simulate_scan_rvol_premarket_mode(tmp_path):
+def test_simulate_scan_rvol_premarket_is_rank_weight_not_floor(tmp_path):
     cache = str(tmp_path)
     meta = {"meta": {"start": "2026-01-01", "end": "2026-12-31"}}
     write_cache(cache, "daily_AAA.json", {**meta, "bars": make_dailies(DAY, 100, 102.0)})
     write_cache(cache, "daily_DDD.json", {**meta, "bars": make_dailies(DAY, 100, 103.0)})
-    # AAA premarket volume 60% of yesterday → rvol 0.6 (passes >= 0.5);
-    # DDD only 10% → filtered despite the bigger gap.
+    write_cache(cache, "daily_EEE.json", {**meta, "bars": make_dailies(DAY, 100, 105.0)})
+    # AAA: 2% gap, hot premarket (0.6x yesterday) → score 1.2
+    # DDD: 3% gap, thin premarket (0.1x)         → score 0.3
+    # EEE: 5% gap, ZERO premarket (the median IEX morning) → score 0
     write_cache(cache, "scan_AAA.json",
                 {"meta": {"start": "2026-01-01", "end": "2026-12-31"},
                  "days": {DAY: {"pm_vol": 600_000, "open": 102.0}}})
     write_cache(cache, "scan_DDD.json",
                 {"meta": {"start": "2026-01-01", "end": "2026-12-31"},
                  "days": {DAY: {"pm_vol": 100_000, "open": 103.0}}})
+    write_cache(cache, "scan_EEE.json",
+                {"meta": {"start": "2026-01-01", "end": "2026-12-31"},
+                 "days": {DAY: {"pm_vol": 0, "open": 105.0}}})
 
     cfg = sleeve_config()
-    cfg.strategy.stock_sleeve_symbols = "AAA,DDD"
+    cfg.strategy.stock_sleeve_symbols = "AAA,DDD,EEE"
     bt = SleeveBacktester(cfg, cache_dir=cache, rvol_mode="premarket", offline=True)
-    cands = bt.simulate_scan(DAY, ["AAA", "DDD"])
-    assert [c.symbol for c in cands] == ["AAA"]
+    cands = bt.simulate_scan(DAY, ["AAA", "DDD", "EEE"])
+    # Nobody is FILTERED for low premarket volume (the live 0.5 floor is not
+    # reproducible from IEX history — max measured ratio 0.095); rvol only
+    # weights the ranking.
+    assert [c.symbol for c in cands] == ["AAA", "DDD", "EEE"]
     assert cands[0].rvol == pytest.approx(0.6)
     assert bt._rvol_fallbacks == 0
 
     # Missing scan table → rvol falls back to 1.0 and is counted, not fatal.
     os.remove(os.path.join(cache, "scan_DDD.json"))
     bt2 = SleeveBacktester(cfg, cache_dir=cache, rvol_mode="premarket", offline=True)
-    cands2 = bt2.simulate_scan(DAY, ["AAA", "DDD"])
-    assert {c.symbol for c in cands2} == {"AAA", "DDD"}
+    cands2 = bt2.simulate_scan(DAY, ["AAA", "DDD", "EEE"])
     assert bt2._rvol_fallbacks == 1
+    # DDD's fallback rvol=1.0 makes its score 3.0 → it now outranks AAA.
+    assert [c.symbol for c in cands2] == ["DDD", "AAA", "EEE"]
+
+
+def test_simulate_scan_zero_premarket_ties_break_by_gap(tmp_path):
+    """The median IEX morning has ZERO premarket volume for most names —
+    scores collapse to 0 and the ranking must degrade to gap size, not
+    universe order."""
+    cache = str(tmp_path)
+    meta = {"meta": {"start": "2026-01-01", "end": "2026-12-31"}}
+    write_cache(cache, "daily_AAA.json", {**meta, "bars": make_dailies(DAY, 100, 101.0)})  # +1%
+    write_cache(cache, "daily_BBB.json", {**meta, "bars": make_dailies(DAY, 100, 104.0)})  # +4%
+    for sym in ("AAA", "BBB"):
+        write_cache(cache, f"scan_{sym}.json",
+                    {"meta": {"start": "2026-01-01", "end": "2026-12-31"},
+                     "days": {DAY: {"pm_vol": 0, "open": None}}})
+    cfg = sleeve_config()
+    bt = SleeveBacktester(cfg, cache_dir=cache, rvol_mode="premarket", offline=True)
+    cands = bt.simulate_scan(DAY, ["AAA", "BBB"])
+    assert [c.symbol for c in cands] == ["BBB", "AAA"]
 
 
 # ---------------------------------------------------------------------------

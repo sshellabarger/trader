@@ -48,8 +48,13 @@ def _env_float(name: str, current: float) -> float:
 
 @dataclass
 class BrokerConfig:
-    api_key: str = ""
-    api_secret: str = ""
+    # repr=False: a dataclass's default repr prints every field, and Config's
+    # repr embeds BrokerConfig's — so any assertion message, log line, or
+    # debugger echo of a Config object was printing the LIVE API key/secret in
+    # clear text (observed 2026-07-22 in a pytest failure paste). Secrets never
+    # belong in reprs.
+    api_key: str = field(default="", repr=False)
+    api_secret: str = field(default="", repr=False)
     base_url: str = "https://paper-api.alpaca.markets"
     data_url: str = "https://data.alpaca.markets"
     data_feed: str = "iex"

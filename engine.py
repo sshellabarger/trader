@@ -127,6 +127,10 @@ class Engine:
         # Prior regular-session close of the regime symbol (QQQ), captured in
         # _new_day; the premarket gap above is measured against it.
         self._prev_regular_close: Optional[float] = None
+        # Per-pick daily ATR% for the ORB ATR-scaled range band (sleeve mode,
+        # orb_range_band_atr). Fetched once per day after the morning scan;
+        # a missing entry makes the strategy fall back to the fixed band.
+        self._daily_atr_pct: Dict[str, float] = {}
 
     def run(self, loop_interval: int = 30):
         logger.info("=" * 60)
@@ -306,6 +310,7 @@ class Engine:
         # it and capture the prior regular-session close it is measured against.
         self._overnight_gap_pct = None
         self._prev_regular_close = None
+        self._daily_atr_pct.clear()
 
         # Detect regime
         try:
@@ -522,6 +527,39 @@ class Engine:
             logger.info(f"Stock sleeve picks for {today}: {detail}")
         else:
             logger.info(f"Stock sleeve: no qualifying candidates for {today}")
+        self._refresh_daily_atr(today)
+
+    def _refresh_daily_atr(self, today: str):
+        """Fetch each pick's daily bars once and compute its daily ATR% for the
+        ORB ATR-scaled range band (the config the sleeve replay sweep validated:
+        band = [lo, hi] x daily ATR% instead of a fixed % of price). Only runs
+        when the band is enabled; fail-open per symbol — a fetch failure just
+        leaves that name on the fixed-band fallback, loudly."""
+        if not (self.sleeve_enabled and self.config.strategy.orb_range_band_atr):
+            return
+        from .indicators import daily_atr_pct
+        start_dt = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        for sym in self.symbols:
+            try:
+                bars = self.broker.get_bars(sym, timeframe="1Day",
+                                            start=start_dt, limit=60)
+                val = daily_atr_pct(bars or [], today)
+            except Exception as exc:
+                logger.warning(f"daily ATR fetch failed for {sym}: {exc}")
+                val = None
+            if val is not None and val > 0:
+                self._daily_atr_pct[sym] = val
+            else:
+                logger.warning(
+                    f"{sym}: daily ATR%% unavailable — ORB range band falls "
+                    f"back to the fixed {self.config.strategy.orb_min_range_pct}"
+                    f"-{self.config.strategy.orb_max_range_pct}%% band"
+                )
+        if self._daily_atr_pct:
+            detail = ", ".join(f"{s} {v:.1f}%" for s, v in self._daily_atr_pct.items())
+            sc = self.config.strategy
+            logger.info(f"Daily ATR%% (band {sc.orb_range_atr_lo}-"
+                        f"{sc.orb_range_atr_hi} x ATR): {detail}")
 
     def _refresh_news(self):
         """Once per day, pull recent MARKET-WIDE news, build a point-in-time
@@ -599,6 +637,9 @@ class Engine:
             indicators["overnight_gap_pct"] = (
                 self._overnight_gap_pct if sym in self._index_symbols else None
             )
+            # Daily ATR% for the ATR-scaled ORB range band (sleeve picks only;
+            # absent → the strategy falls back to the fixed band, fail-safe).
+            indicators["daily_atr_pct"] = self._daily_atr_pct.get(sym)
 
             candidate = Candidate(
                 symbol=sym,

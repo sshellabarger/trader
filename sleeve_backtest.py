@@ -26,8 +26,14 @@ Known deltas vs the live sleeve (document, don't hide):
     `--calibrate` quantifies exactly this gap against the droplet journals.
   - Live relative volume comes from the 09:30 snapshot's accumulating daily
     bar; the replay reconstructs it from premarket 1-min bars (`--rvol
-    premarket`) or neutralizes it (`--rvol off`). Calibration shows how close
-    the reconstruction lands.
+    premarket`) or neutralizes it (`--rvol off`). MEASURED 2026-07-22 on the
+    Jan-Jul 2026 cache: IEX premarket volume is 0-9.5% of the prior IEX day
+    (median 0, max 0.095 across 3,752 symbol-days), while live scanner rvols
+    print 0.5-13 — the two quantities are NOT comparable. The sim therefore
+    uses reconstructed rvol as a RANKING WEIGHT ONLY and never applies the
+    live 0.5 floor to it (the floor would veto 100% of history, and did, on
+    the first baseline run). Calibration shows which ranking mode best
+    matches the live pick lists.
   - Live scanner trims to ScannerConfig.max_candidates (5, no env override)
     BEFORE the sleeve's own top-N — so live candidate counts above 5 need a
     code change, not just STOCK_SLEEVE_MAX_CANDIDATES. The replay mirrors the
@@ -56,6 +62,10 @@ from zoneinfo import ZoneInfo
 
 from .backtest import Backtester, BacktestResult, session_window
 from .config import Config
+# daily_atr_pct lives in indicators.py so the LIVE engine and this replay
+# compute the ATR band input with the same code; re-exported here because the
+# replay's public API (and its tests) reach it via this module.
+from .indicators import daily_atr_pct
 from .regime import RegimeDetector
 from .risk import RiskManager
 from .strategies.orb import ORBStrategy
@@ -89,36 +99,6 @@ def daily_bar_for(daily_bars: List[Dict], day_str: str) -> Optional[Dict]:
         if str(b.get("t", ""))[:10] == day_str:
             return b
     return None
-
-
-def daily_atr_pct(daily_bars: List[Dict], day_str: str,
-                  period: int = 14) -> Optional[float]:
-    """14-day ATR as a % of price, from daily bars STRICTLY before day_str.
-
-    Simple mean of true ranges (not Wilder smoothing — with a fixed lookback
-    the difference is noise and the arithmetic stays auditable). Returns None
-    with fewer than 5 usable true ranges, which makes the ORB ATR band fall
-    back to the fixed % band (fail-safe, mirrors the strategy's contract).
-    """
-    prior = [b for b in daily_bars if str(b.get("t", ""))[:10] < day_str]
-    if len(prior) < 2:
-        return None
-    window = prior[-(period + 1):]
-    trs: List[float] = []
-    for i in range(1, len(window)):
-        try:
-            h = float(window[i]["h"])
-            l = float(window[i]["l"])
-            pc = float(window[i - 1]["c"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    if len(trs) < 5:
-        return None
-    last_close = float(window[-1].get("c", 0) or 0)
-    if last_close <= 0:
-        return None
-    return (sum(trs) / len(trs)) / last_close * 100.0
 
 
 @dataclass
@@ -325,7 +305,12 @@ class SleeveBacktester(Backtester):
     # ------------------------------------------------------------------
     def simulate_scan(self, day_str: str, universe: List[str]) -> List[SimCandidate]:
         """Reproduce scanner.scan_candidates for one historical morning:
-        same filters, same score, same long-bias ordering, same trim."""
+        same price/volume filters, same score, same long-bias ordering, same
+        trim — EXCEPT the live rvol>=0.5 floor, which is deliberately not
+        applied (see the module docstring: IEX premarket volume maxes at ~0.1x
+        the prior day, so the floor vetoes all of history; reconstructed rvol
+        is a ranking weight only, with |gap| as the tiebreaker so zero-premarket
+        mornings degrade to pure gap ranking instead of arbitrary order)."""
         sc = self.config.scanner
         long_bias = self.config.strategy.stock_sleeve_long_bias
         cands: List[SimCandidate] = []
@@ -357,15 +342,20 @@ class SleeveBacktester(Backtester):
                     rvol = (float(rec.get("pm_vol", 0)) / prev_vol) if prev_vol > 0 else 0.0
             else:
                 rvol = 1.0
-            if rvol < sc.min_relative_volume:
-                continue
+            # NOTE: no rvol >= min_relative_volume gate here. The live floor
+            # operates on snapshot semantics that IEX history cannot reproduce
+            # (measured max pm/prev ratio 0.095 → the floor would drop every
+            # name every day). Reconstructed rvol only weights the ranking.
             cands.append(SimCandidate(sym, gap_pct, rvol, open_price,
                                       prev_close, prev_vol))
 
+        # |gap| tiebreaker: on mornings where premarket IEX volume is zero for
+        # most names (the median morning), scores collapse to 0 and the ranking
+        # degrades to pure gap size instead of list order.
         if long_bias:
-            cands.sort(key=lambda c: (c.gap_pct < 0, -c.score))
+            cands.sort(key=lambda c: (c.gap_pct < 0, -c.score, -abs(c.gap_pct)))
         else:
-            cands.sort(key=lambda c: c.score, reverse=True)
+            cands.sort(key=lambda c: (-c.score, -abs(c.gap_pct)))
         return cands[: sc.max_candidates]
 
     def picks_for_day(self, day_str: str, universe: List[str]

@@ -390,3 +390,39 @@ def compute_indicators(bars: List[Dict]) -> Dict:
     result["last_volume"] = float(bars[-1]["v"])
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Daily ATR% — shared by the live engine and the sleeve replay backtester so
+# the ATR-scaled ORB range band sees the SAME number in both places.
+# ---------------------------------------------------------------------------
+
+def daily_atr_pct(daily_bars: List[Dict], day_str: str,
+                  period: int = 14) -> Optional[float]:
+    """ATR of DAILY bars as a % of price, using bars STRICTLY before day_str
+    (no lookahead: the value is known before the open it gates).
+
+    Simple mean of true ranges rather than Wilder smoothing — with a fixed
+    lookback the difference is noise and the arithmetic stays auditable.
+    Returns None with fewer than 5 usable true ranges; the ORB ATR band
+    treats None as "fall back to the fixed % band" (fail-safe).
+    """
+    prior = [b for b in daily_bars if str(b.get("t", ""))[:10] < day_str]
+    if len(prior) < 2:
+        return None
+    window = prior[-(period + 1):]
+    trs: List[float] = []
+    for i in range(1, len(window)):
+        try:
+            h = float(window[i]["h"])
+            l = float(window[i]["l"])
+            pc = float(window[i - 1]["c"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < 5:
+        return None
+    last_close = float(window[-1].get("c", 0) or 0)
+    if last_close <= 0:
+        return None
+    return (sum(trs) / len(trs)) / last_close * 100.0

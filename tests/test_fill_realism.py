@@ -124,7 +124,11 @@ def test_entry_fill_next_open_uses_next_bars_open():
     assert abs(t.entry_price - 70.5 * (1 + slip)) < 1e-6   # next open, not 70.0
 
 
-def test_entry_fill_same_bar_close_when_flag_off():
+def test_entry_fill_same_bar_close_when_flag_off(monkeypatch):
+    # The suite must not depend on the operator's shell: running with
+    # BACKTEST_ENTRY_FILL_NEXT_OPEN=true exported (as decision-grade backtest
+    # sessions do) previously failed this default-behavior test.
+    monkeypatch.delenv("BACKTEST_ENTRY_FILL_NEXT_OPEN", raising=False)
     config = Config()
     assert config.backtest.entry_fill_next_open is False   # default preserved
     slip = config.backtest.slippage_bps / 10_000.0

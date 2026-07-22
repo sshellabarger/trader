@@ -266,8 +266,10 @@ def main():
     sb_p.add_argument("--offline", action="store_true",
                       help="never touch the network; cache misses are skipped+counted")
     sb_p.add_argument("--rvol", choices=["premarket", "off"], default="premarket",
-                      help="relative-volume source for the scanner sim "
-                           "(premarket = reconstruct from 4:00-9:30 bars; off = rank by |gap| only)")
+                      help="scanner ranking weight (premarket = |gap| x premarket-volume "
+                           "ratio from 4:00-9:30 IEX bars, gap as tiebreaker; off = |gap| "
+                           "only). Never a floor — IEX premarket can't reproduce the live "
+                           "0.5 filter (measured max ratio 0.095)")
     sb_p.add_argument("--cache-dir", default="data/sleeve_cache")
     sb_p.add_argument("--band", default="",
                       help="fixed range band as 'lo,hi' in %% of price (hi=0 uncaps)")
