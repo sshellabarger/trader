@@ -7,6 +7,8 @@ Usage:
   python -m trader backtest --start 2025-01-02 --end 2025-06-30
   python -m trader backtest --start 2025-01-02 --end 2025-06-30 --symbol TQQQ
   python -m trader walkforward --start 2025-01-02 --end 2025-06-30 --symbol TQQQ
+  python -m trader kalshi-record                # 24/7 prediction-market recorder
+  python -m trader kalshi-discover --category "Climate and Weather"
 """
 from __future__ import annotations
 
@@ -223,6 +225,42 @@ def cmd_screen(args):
         print("  (empty — loosen the floors, check the data feed, or widen the price band)")
 
 
+def cmd_kalshi_record(args):
+    """24/7 Kalshi snapshot recorder (phase 0 of the prediction-market sleeve;
+    public data only, no credentials, no orders). See trader/kalshi/."""
+    from .kalshi.client import KalshiClient
+    from .kalshi.config import KalshiConfig
+    from .kalshi.recorder import KalshiRecorder
+
+    setup_logging(args.log_level)
+    kcfg = KalshiConfig()
+    if args.series:
+        kcfg.series = args.series
+    recorder = KalshiRecorder(KalshiClient(kcfg), kcfg)
+    if args.settlements_only:
+        wrote = recorder.sweep_settlements()
+        print(f"Settlement sweep complete: {wrote} new outcomes")
+        return
+    recorder.run_forever()
+
+
+def cmd_kalshi_discover(args):
+    """List current Kalshi series so KALSHI_SERIES can be set without guessing
+    tickers (naming drifts: HIGHCHI died, KXHIGHCHI is live)."""
+    from .kalshi.client import KalshiClient
+    from .kalshi.config import KalshiConfig
+
+    setup_logging(args.log_level)
+    client = KalshiClient(KalshiConfig())
+    categories = ([args.category] if args.category else
+                  ["Climate and Weather", "Economics", "Sports", "Financials"])
+    for cat in categories:
+        series = client.get_series_list(category=cat)
+        print(f"\n{cat}: {len(series)} series")
+        for s in series:
+            print(f"  {s.get('ticker', '?'):28s} {s.get('title', '')[:70]}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DayTrader v2 — ETF Edition")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
@@ -310,6 +348,19 @@ def main():
     sc_p.add_argument("--no-prefilter", action="store_true",
                       help="skip the snapshot pre-filter")
 
+    kr_p = sub.add_parser("kalshi-record",
+                          help="24/7 Kalshi market recorder (phase 0, no orders)")
+    kr_p.add_argument("--series", default="",
+                      help="comma-separated series tickers (default: "
+                           "KALSHI_SERIES or the built-in verified set)")
+    kr_p.add_argument("--settlements-only", action="store_true",
+                      help="run one settlement sweep and exit")
+
+    kd_p = sub.add_parser("kalshi-discover",
+                          help="list Kalshi series tickers by category")
+    kd_p.add_argument("--category", default="",
+                      help='e.g. "Climate and Weather", "Economics", "Sports"')
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -322,6 +373,10 @@ def main():
         cmd_sleeve_backtest(args)
     elif args.command == "screen-universe":
         cmd_screen(args)
+    elif args.command == "kalshi-record":
+        cmd_kalshi_record(args)
+    elif args.command == "kalshi-discover":
+        cmd_kalshi_discover(args)
     else:
         parser.print_help()
 

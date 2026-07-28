@@ -129,3 +129,28 @@ docker compose up -d --build
 - Secrets live only in `.env`, which is gitignored and excluded from the image.
 - The default market-data feed is `iex` (free, partial). Consider the `sip`
   feed (paid Alpaca plan) before live trading.
+
+## Kalshi phase-0 recorder
+
+A second compose service, `kalshi-recorder`, records prediction-market data
+24/7 (see `trader/kalshi/`). It is measurement only: public endpoints, no
+credentials, no orders. It shares the trader image, so deploying is the same
+`git pull && docker compose build && docker compose up -d` — compose starts
+both services.
+
+Data lands in `data/kalshi/` on the host:
+
+- `snapshots-YYYYMMDD.jsonl` — every tracked market's top-of-book each poll
+  (`"type":"md"`), plus order-book depth near close (`"type":"book"`). Rough
+  budget at defaults: ~50 MB/day plain text; watch it the first week.
+- `settlements.jsonl` — settled outcomes, deduped, swept daily.
+
+Sanity checks after deploy:
+
+    docker compose logs -f kalshi-recorder      # "Kalshi recorder up: ..."
+    tail -1 data/kalshi/snapshots-$(date -u +%Y%m%d).jsonl
+    docker compose run --rm trader python -m trader kalshi-discover
+
+Tune series/cadence via the `KALSHI_*` block in `.env.example`. A series that
+lists nothing (off-season NFL, renamed ticker) logs a WARNING once per day —
+that is expected until the season's markets list, not a failure.

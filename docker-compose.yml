@@ -33,3 +33,35 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+  # Kalshi phase-0 recorder (see trader/kalshi/): PUBLIC market data only — no
+  # credentials, no orders. Reuses the trader image (built by the service
+  # above) and the same hardening profile + entrypoint (chown, drop to
+  # 'trader' via gosu). Snapshots land in the same bind-mounted ./data.
+  kalshi-recorder:
+    image: trader:latest
+    container_name: kalshi-recorder
+    restart: always
+    depends_on:
+      - trader
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    env_file:
+      - .env
+    command: ["python", "-m", "trader", "kalshi-record"]
+    volumes:
+      # data/kalshi/: snapshots-YYYYMMDD.jsonl + settlements.jsonl
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
