@@ -7,7 +7,8 @@ import json
 
 import requests
 
-from trader.kalshi.client import KalshiClient, valid_ticker
+from trader.kalshi.client import (
+    KalshiClient, price_cents, quantity_fp, valid_ticker)
 from trader.kalshi.config import KalshiConfig, taker_fee_cents
 
 
@@ -156,3 +157,32 @@ def test_taker_fee_matches_published_formula():
     # Degenerate prices never go negative.
     assert taker_fee_cents(0, 1) == 0
     assert taker_fee_cents(100, 1) == 0
+
+
+def test_orderbook_parses_2026_fp_shape(monkeypatch):
+    # Trimmed from a real api.elections.kalshi.com response, 2026-08-02.
+    client = _client()
+
+    def fake_request(method, url, **kwargs):
+        return _response(200, {"orderbook_fp": {
+            "yes_dollars": [["0.0300", "295.08"], ["0.0400", "62.46"]],
+            "no_dollars": [["0.9100", "85.30"]]}})
+
+    monkeypatch.setattr(client.session, "request", fake_request)
+    book = client.get_orderbook("KXHIGHCHI-26AUG03-T83")
+    assert book == {"yes": [[3, 295.08], [4, 62.46]], "no": [[91, 85.3]]}
+
+
+def test_price_and_quantity_extractors_accept_both_generations():
+    legacy = {"yes_bid": 44, "last_price": 45, "volume": 1000}
+    new = {"yes_bid_dollars": "0.0500", "last_price_dollars": "0.1000",
+           "volume_fp": "1181.87", "yes_bid_size_fp": "8.09"}
+    assert price_cents(legacy, "yes_bid") == 44
+    assert price_cents(new, "yes_bid") == 5
+    assert price_cents(new, "last_price") == 10
+    assert price_cents({}, "yes_bid") is None
+    assert price_cents({"yes_bid_dollars": "n/a"}, "yes_bid") is None
+    assert quantity_fp(legacy, "volume") == 1000.0
+    assert quantity_fp(new, "volume") == 1181.87
+    assert quantity_fp(new, "yes_bid_size") == 8.09
+    assert quantity_fp({}, "volume") is None

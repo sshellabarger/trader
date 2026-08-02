@@ -39,6 +39,51 @@ def valid_ticker(ticker: object) -> bool:
     return isinstance(ticker, str) and bool(_TICKER_RE.match(ticker))
 
 
+def price_cents(market: Dict, field: str) -> Optional[int]:
+    """Price in integer cents from either Kalshi payload generation: legacy
+    integer-cent fields ('yes_bid': 5) or 2026 dollar-strings
+    ('yes_bid_dollars': '0.0500'). The live API dropped the legacy fields
+    (observed 2026-08-02) and the recorder's first week captured no prices at
+    all; reading both generations is the fix. None when absent/unparseable."""
+    v = market.get(field)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return int(round(v))
+    v = market.get(f"{field}_dollars")
+    if v is None:
+        return None
+    try:
+        return int(round(float(v) * 100))
+    except (TypeError, ValueError):
+        return None
+
+
+def quantity_fp(market: Dict, field: str) -> Optional[float]:
+    """Contract quantity from either generation: legacy ints ('volume': 1000)
+    or fractional '_fp' strings ('volume_fp': '1181.87'). Floats — Kalshi
+    introduced fractional contracts with the _fp payloads."""
+    v = market.get(field)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    v = market.get(f"{field}_fp")
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _levels_from_dollars(levels) -> List[List[float]]:
+    """[["0.0300", "295.08"], ...] -> [[3, 295.08], ...] (cents, contracts)."""
+    out: List[List[float]] = []
+    for lv in levels or []:
+        try:
+            out.append([int(round(float(lv[0]) * 100)), float(lv[1])])
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
 def _guard_ticker(ticker: object, where: str) -> bool:
     if valid_ticker(ticker):
         return True
@@ -229,16 +274,24 @@ class KalshiClient:
         return result.get("market")
 
     def get_orderbook(self, ticker: str, depth: int = 10) -> Optional[Dict]:
-        """Order book as {"yes": [[price_cents, count], ...], "no": [...]}.
-        Either side can be missing/None on an empty book — normalized to []."""
+        """Order book as {"yes": [[price_cents, qty], ...], "no": [...]}.
+        Accepts both payload generations: legacy {"orderbook": {"yes":
+        [[cents, count], ...]}} and the 2026 {"orderbook_fp": {"yes_dollars":
+        [["0.0300", "295.08"], ...]}} (dollar-string prices, fractional
+        quantities). Either side can be missing/None on an empty book —
+        normalized to []."""
         if not _guard_ticker(ticker, "get_orderbook"):
             return None
         result = self._request("GET", f"/markets/{ticker}/orderbook",
                                params={"depth": depth})
         if not isinstance(result, dict):
             return None
-        book = result.get("orderbook") or {}
-        return {"yes": book.get("yes") or [], "no": book.get("no") or []}
+        book = result.get("orderbook")
+        if isinstance(book, dict) and ("yes" in book or "no" in book):
+            return {"yes": book.get("yes") or [], "no": book.get("no") or []}
+        fp = result.get("orderbook_fp") or {}
+        return {"yes": _levels_from_dollars(fp.get("yes_dollars")),
+                "no": _levels_from_dollars(fp.get("no_dollars"))}
 
     def get_trades(self, ticker: str = "", min_ts: Optional[int] = None,
                    limit: int = 100) -> List[Dict]:

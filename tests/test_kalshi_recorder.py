@@ -188,3 +188,58 @@ def test_cycle_polls_due_series_and_sweeps_once(tmp_path):
     clock["now"] = NOW + cfg.base_interval_sec + 1
     rec.cycle()
     assert len(_lines(_snapshot_file(cfg))) == first_lines + 2
+
+
+# Trimmed from a real api.elections.kalshi.com market payload (2026-08-02):
+# the generation with *_dollars prices, *_fp quantities, and NO legacy
+# integer-cent fields. The recorder's first week ran against this shape and
+# captured zero prices; these tests pin the repaired behavior.
+def _market_2026(ticker, close_epoch, **extra):
+    m = {
+        "ticker": ticker,
+        "event_ticker": ticker.rsplit("-", 1)[0],
+        "close_time": _iso(close_epoch),
+        "status": "active",
+        "yes_bid_dollars": "0.0500", "yes_ask_dollars": "0.0600",
+        "no_bid_dollars": "0.9400", "no_ask_dollars": "0.9500",
+        "last_price_dollars": "0.1000",
+        "volume_fp": "1181.87", "volume_24h_fp": "1181.87",
+        "open_interest_fp": "811.14",
+        "yes_bid_size_fp": "8.09", "yes_ask_size_fp": "148.00",
+    }
+    m.update(extra)
+    return m
+
+
+def test_2026_dollar_fp_payload_yields_priced_snapshot(tmp_path):
+    far_close = NOW + 48 * 3600
+    client = StubClient(
+        {"KXTEST": [_market_2026("KXTEST-26AUG03-T83", far_close)]})
+    rec = KalshiRecorder(client, _config(tmp_path), now_fn=lambda: NOW)
+
+    rec.poll_series("KXTEST")
+
+    md = _lines(_snapshot_file(rec.config))[0]
+    assert md["yes_bid"] == 5 and md["yes_ask"] == 6
+    assert md["no_bid"] == 94 and md["no_ask"] == 95
+    assert md["last"] == 10
+    assert md["vol"] == 1181.87 and md["oi"] == 811.14
+    assert md["yes_bid_sz"] == 8.09 and md["yes_ask_sz"] == 148.0
+    assert rec.quoted_lines == 1
+
+
+def test_priceless_markets_log_loud_error_once_per_day(tmp_path, caplog):
+    far_close = NOW + 48 * 3600
+    bare = {"ticker": "KXTEST-26AUG03-T83",
+            "event_ticker": "KXTEST-26AUG03",
+            "close_time": _iso(far_close), "status": "active"}
+    client = StubClient({"KXTEST": [bare]})
+    rec = KalshiRecorder(client, _config(tmp_path), now_fn=lambda: NOW)
+
+    with caplog.at_level("ERROR"):
+        rec.poll_series("KXTEST")
+        rec.poll_series("KXTEST")
+
+    errors = [r for r in caplog.records if "NO price fields" in r.message]
+    assert len(errors) == 1
+    assert rec.quoted_lines == 0

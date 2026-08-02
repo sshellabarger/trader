@@ -8,9 +8,9 @@ one file per UTC day plus a settlements file:
 
   {"t": ..., "type": "md",     "ticker": ..., "yes_bid": ..., "yes_ask": ...,
    "no_bid": ..., "no_ask": ..., "last": ..., "vol": ..., "vol24": ...,
-   "oi": ..., "close": ..., "status": ...}
-  {"t": ..., "type": "book",   "ticker": ..., "yes": [[price, count], ...],
-   "no": [[price, count], ...]}                       (markets near close only)
+   "oi": ..., "yes_bid_sz": ..., "yes_ask_sz": ..., "close": ..., "status": ...}
+  {"t": ..., "type": "book",   "ticker": ..., "yes": [[price, qty], ...],
+   "no": [[price, qty], ...]}                         (markets near close only)
   {"t": ..., "type": "settle", "ticker": ..., "result": ..., "close": ...}
 
 Design notes:
@@ -25,6 +25,12 @@ Design notes:
   rate so it picks up new listings (e.g. KXNFLGAME in late August).
 - The settlement sweep runs at startup and on every UTC date change, deduped
   against settlements.jsonl, so outcomes join the snapshots automatically.
+- Prices are integer cents and quantities (possibly fractional) contracts,
+  read through extractors that accept both Kalshi payload generations (legacy
+  ints and 2026 *_dollars/*_fp). If a poll returns markets but zero
+  recognizable prices, the recorder logs an ERROR once per series per UTC day
+  — a schema change must never again produce a silent week of price-less
+  snapshots.
 - Clock and client are injectable for tests; writes are plain append-only
   JSONL, crash-safe by construction.
 """
@@ -37,24 +43,34 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from .client import KalshiClient
+from .client import KalshiClient, price_cents, quantity_fp
 from .config import KalshiConfig
 
 logger = logging.getLogger(__name__)
 
-# Market fields copied into "md" lines (compact key -> API field).
-_MD_FIELDS = (
-    ("yes_bid", "yes_bid"),
-    ("yes_ask", "yes_ask"),
-    ("no_bid", "no_bid"),
-    ("no_ask", "no_ask"),
-    ("last", "last_price"),
-    ("vol", "volume"),
-    ("vol24", "volume_24h"),
-    ("oi", "open_interest"),
-    ("close", "close_time"),
-    ("status", "status"),
+# Market fields copied into "md" lines (compact key -> extractor). Extractors
+# accept BOTH Kalshi payload generations — the legacy integer-cent/int fields
+# and the 2026 *_dollars / *_fp fields (see client.price_cents/quantity_fp).
+# Prices land as integer cents; quantities as (possibly fractional) contracts.
+# yes_bid_sz/yes_ask_sz are top-of-book sizes (new generation only) — fill
+# realism for the later paper engine.
+_MD_EXTRACTORS = (
+    ("yes_bid", lambda m: price_cents(m, "yes_bid")),
+    ("yes_ask", lambda m: price_cents(m, "yes_ask")),
+    ("no_bid", lambda m: price_cents(m, "no_bid")),
+    ("no_ask", lambda m: price_cents(m, "no_ask")),
+    ("last", lambda m: price_cents(m, "last_price")),
+    ("vol", lambda m: quantity_fp(m, "volume")),
+    ("vol24", lambda m: quantity_fp(m, "volume_24h")),
+    ("oi", lambda m: quantity_fp(m, "open_interest")),
+    ("yes_bid_sz", lambda m: quantity_fp(m, "yes_bid_size")),
+    ("yes_ask_sz", lambda m: quantity_fp(m, "yes_ask_size")),
+    ("close", lambda m: m.get("close_time")),
+    ("status", lambda m: m.get("status")),
 )
+
+# A snapshot "carries a price" if any of these landed — the all-None guard.
+_PRICE_KEYS = ("yes_bid", "yes_ask", "no_bid", "no_ask", "last")
 
 
 def _parse_close_epoch(close_time: Optional[str]) -> Optional[float]:
@@ -84,9 +100,11 @@ class KalshiRecorder:
         self._next_poll: Dict[str, float] = {
             s: 0.0 for s in self.config.series_list()}
         self._warned_empty: Dict[str, str] = {}   # series -> UTC date warned
+        self._warned_unpriced: Dict[str, str] = {}  # series -> UTC date warned
         self._settled_seen: Set[str] = set()
         self._settle_sweep_date: str = ""          # UTC date of last sweep
         self.lines_written = 0
+        self.quoted_lines = 0
         self.cycles = 0
 
         os.makedirs(self.config.data_dir, exist_ok=True)
@@ -161,15 +179,20 @@ class KalshiRecorder:
         hot_horizon = self.config.hot_window_hours * 3600.0
         book_horizon = self.config.book_window_hours * 3600.0
 
+        priced_any = False
         for m in markets:
             line: Dict[str, Any] = {
                 "t": ts, "type": "md",
                 "ticker": m.get("ticker"),
                 "event": m.get("event_ticker"),
             }
-            for compact, field in _MD_FIELDS:
-                if m.get(field) is not None:
-                    line[compact] = m.get(field)
+            for compact, extract in _MD_EXTRACTORS:
+                val = extract(m)
+                if val is not None:
+                    line[compact] = val
+            if any(k in line for k in _PRICE_KEYS):
+                priced_any = True
+                self.quoted_lines += 1
             self._append(path, line)
 
             close_epoch = _parse_close_epoch(m.get("close_time"))
@@ -179,6 +202,15 @@ class KalshiRecorder:
                 if close_epoch - now <= book_horizon:
                     book_candidates.append(
                         {"ticker": m.get("ticker"), "close_epoch": close_epoch})
+
+        if not priced_any:
+            today = self._utc_date()
+            if self._warned_unpriced.get(series) != today:
+                logger.error(
+                    f"Series {series}: {len(markets)} open markets but NO "
+                    f"price fields recognized — Kalshi payload schema change? "
+                    f"First market keys: {sorted(markets[0].keys())}")
+                self._warned_unpriced[series] = today
 
         interval = (self.config.hot_interval_sec if hot
                     else self.config.base_interval_sec)
@@ -271,10 +303,12 @@ class KalshiRecorder:
                 if self.now_fn() - last_report >= 600:
                     logger.info(
                         f"Recorder: {self.cycles} cycles, "
-                        f"{self.lines_written} lines written")
+                        f"{self.lines_written} lines written, "
+                        f"{self.quoted_lines} carried quotes")
                     last_report = self.now_fn()
                 self.sleep_fn(tick_seconds)
         except KeyboardInterrupt:
             logger.info(
                 f"Recorder stopped: {self.cycles} cycles, "
-                f"{self.lines_written} lines written")
+                f"{self.lines_written} lines written, "
+                f"{self.quoted_lines} carried quotes")
