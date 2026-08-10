@@ -9,6 +9,8 @@ Usage:
   python -m trader walkforward --start 2025-01-02 --end 2025-06-30 --symbol TQQQ
   python -m trader kalshi-record                # 24/7 prediction-market recorder
   python -m trader kalshi-discover --category "Climate and Weather"
+  python -m trader kalshi-weather               # weather fair values vs market
+  python -m trader kalshi-weather-backtest --inputs data/kalshi_wk2/weather_backtest_inputs.csv
 """
 from __future__ import annotations
 
@@ -244,6 +246,75 @@ def cmd_kalshi_record(args):
     recorder.run_forever()
 
 
+def cmd_kalshi_weather(args):
+    """Fair values + net edges for open KXHIGH* markets from the GEFS+ECMWF
+    ensembles at the official settlement stations (measurement only)."""
+    from .kalshi.client import KalshiClient
+    from .kalshi.config import KalshiConfig
+    from .kalshi import weather as wx
+
+    setup_logging(args.log_level)
+    client = KalshiClient(KalshiConfig())
+    cfg = wx.WeatherConfig()
+    series_list = ([s.strip().upper() for s in args.series.split(",") if s.strip()]
+                   if args.series else list(wx.STATIONS))
+    pools_cache = {}
+    for series in series_list:
+        if series not in wx.STATIONS:
+            print(f"{series}: no station mapping, skipping")
+            continue
+        markets = client.get_markets(series_ticker=series, status="open")
+        if not markets:
+            print(f"{series}: no open markets")
+            continue
+        by_event = {}
+        for m in markets:
+            by_event.setdefault(m.get("event_ticker", ""), []).append(m)
+        for event in sorted(by_event):
+            date = wx.parse_event_date(event)
+            if not date or (args.date and date != args.date):
+                continue
+            key = (series, date)
+            if key not in pools_cache:
+                try:
+                    raw = wx.fetch_ensemble_daymax(series, date)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"{series} {date}: ensemble fetch failed: {exc}")
+                    pools_cache[key] = None
+                    continue
+                pools_cache[key] = wx.corrected_pools(
+                    raw, cfg.bias.get(series, 0.0), cfg.spread.get(series, 1.0))
+            pools = pools_cache[key]
+            if not pools:
+                continue
+            n_members = sum(len(p) for p in pools.values())
+            print(f"\n{event}  ({wx.STATIONS[series].name}, {n_members} members)")
+            print(f"  {'ticker':<28}{'fair':>6}{'bid':>5}{'ask':>5}{'edge':>7}  side")
+            for m in sorted(by_event[event], key=lambda x: x.get("ticker", "")):
+                spec = wx.spec_from_api_market(m)
+                yb, ya = m.get("yes_bid"), m.get("yes_ask")
+                from .kalshi.client import price_cents
+                yb, ya = price_cents(m, "yes_bid"), price_cents(m, "yes_ask")
+                if spec is None or yb is None or ya is None or not (0 < yb <= ya < 100):
+                    continue
+                fair = wx.fair_value_cents(spec, pools, cfg)
+                out = wx.evaluate(spec, fair, yb, ya)
+                flag = "  <-- ENTER" if out["net_edge"] >= args.min_edge else ""
+                print(f"  {out['ticker']:<28}{out['fair']:>6}{out['bid']:>5}"
+                      f"{out['ask']:>5}{out['net_edge']:>7}  {out['side']}{flag}")
+
+
+def cmd_kalshi_weather_backtest(args):
+    """Score the weather model vs the recorded market week (Brier + paper
+    trades). See kalshi/weather_backtest.py for the honesty caveats."""
+    from .kalshi import weather_backtest as wb
+
+    setup_logging(args.log_level)
+    result = wb.run(args.inputs, cache_dir=args.cache_dir,
+                    min_edge=args.min_edge)
+    wb.report(result)
+
+
 def cmd_kalshi_discover(args):
     """List current Kalshi series so KALSHI_SERIES can be set without guessing
     tickers (naming drifts: HIGHCHI died, KXHIGHCHI is live)."""
@@ -356,6 +427,26 @@ def main():
     kr_p.add_argument("--settlements-only", action="store_true",
                       help="run one settlement sweep and exit")
 
+    kw_p = sub.add_parser("kalshi-weather",
+                          help="weather fair values vs market (no orders)")
+    kw_p.add_argument("--series", default="", help="comma-separated KXHIGH* subset")
+    kw_p.add_argument("--date", default="", help="only this event date YYYY-MM-DD")
+    kw_p.add_argument("--min-edge", type=float, default=3.0,
+                      help="flag threshold in cents (phase-0 paper rule: 3)")
+
+    kwa_p = sub.add_parser("kalshi-weather-archive",
+                           help="cache today+tomorrow ensemble day-max pools "
+                                "(run daily; the API keeps members ~4-5 days)")
+    kwa_p.add_argument("--cache-dir", default="data/wx_cache")
+
+    kwb_p = sub.add_parser("kalshi-weather-backtest",
+                           help="score weather model vs recorded market week")
+    kwb_p.add_argument("--inputs", required=True,
+                       help="CSV from the banked recordings (ticker,outcome,quotes)")
+    kwb_p.add_argument("--cache-dir", default="data/wx_cache",
+                       help="archived-ensemble cache directory")
+    kwb_p.add_argument("--min-edge", type=float, default=3.0)
+
     kd_p = sub.add_parser("kalshi-discover",
                           help="list Kalshi series tickers by category")
     kd_p.add_argument("--category", default="",
@@ -375,6 +466,14 @@ def main():
         cmd_screen(args)
     elif args.command == "kalshi-record":
         cmd_kalshi_record(args)
+    elif args.command == "kalshi-weather":
+        cmd_kalshi_weather(args)
+    elif args.command == "kalshi-weather-archive":
+        from .kalshi import weather_backtest as _wb
+        setup_logging(args.log_level)
+        _wb.archive_today(args.cache_dir)
+    elif args.command == "kalshi-weather-backtest":
+        cmd_kalshi_weather_backtest(args)
     elif args.command == "kalshi-discover":
         cmd_kalshi_discover(args)
     else:
