@@ -195,13 +195,20 @@ class KalshiRecorder:
                 self.quoted_lines += 1
             self._append(path, line)
 
+            # Sports markets carry close_time ~3 days AFTER the game; the
+            # payload's expected_expiration_time is the real "it ends here"
+            # anchor. Use whichever future timestamp comes first so hot
+            # cadence + books cover games, not the dead post-game window.
             close_epoch = _parse_close_epoch(m.get("close_time"))
-            if close_epoch is not None and close_epoch > now:
-                if close_epoch - now <= hot_horizon:
+            exp_epoch = _parse_close_epoch(m.get("expected_expiration_time"))
+            anchor = min((e for e in (close_epoch, exp_epoch)
+                          if e is not None and e > now), default=None)
+            if anchor is not None:
+                if anchor - now <= hot_horizon:
                     hot = True
-                if close_epoch - now <= book_horizon:
+                if anchor - now <= book_horizon:
                     book_candidates.append(
-                        {"ticker": m.get("ticker"), "close_epoch": close_epoch})
+                        {"ticker": m.get("ticker"), "close_epoch": anchor})
 
         if not priced_any:
             today = self._utc_date()

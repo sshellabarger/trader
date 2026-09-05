@@ -10,6 +10,7 @@ Usage:
   python -m trader kalshi-record                # 24/7 prediction-market recorder
   python -m trader kalshi-discover --category "Climate and Weather"
   python -m trader kalshi-weather               # weather fair values vs market
+  python -m trader kalshi-sports-scan           # Pinnacle devig vs Kalshi sports
   python -m trader kalshi-weather-backtest --inputs data/kalshi_wk2/weather_backtest_inputs.csv
 """
 from __future__ import annotations
@@ -246,6 +247,94 @@ def cmd_kalshi_record(args):
     recorder.run_forever()
 
 
+def cmd_kalshi_sports_scan(args):
+    """Devigged Pinnacle fair vs live Kalshi sports quotes. One Odds-API
+    credit per series scanned; every row is appended to the forward-sample
+    log for later settlement joins (measurement only, no orders)."""
+    import os
+    from datetime import datetime, timezone
+    from .kalshi.client import KalshiClient, price_cents
+    from .kalshi.config import KalshiConfig
+    from .kalshi import sports as sp
+
+    setup_logging(args.log_level)
+    key = os.getenv("ODDS_API_KEY", "")
+    if not key:
+        env_path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "trader", ".env")
+        if not os.path.exists(env_path):
+            env_path = os.path.join(os.getcwd(), ".env")
+        if os.path.exists(env_path):
+            for line in open(env_path, encoding="utf-8"):
+                if line.strip().startswith("ODDS_API_KEY="):
+                    key = line.strip().split("=", 1)[1]
+    if not key:
+        print("ODDS_API_KEY not set (env or trader/.env)")
+        return
+
+    kcfg = KalshiConfig()
+    client = KalshiClient(kcfg)
+    series_list = ([s.strip().upper() for s in args.series.split(",") if s.strip()]
+                   if args.series else ["KXMLBGAME", "KXNFLGAME"])
+    now = datetime.now(timezone.utc)
+    log_rows = []
+    for series in series_list:
+        if series not in sp.SPORT_KEYS:
+            print(f"{series}: not a sports series")
+            continue
+        markets = client.get_markets(series_ticker=series, status="open")
+        by_event = {}
+        for m in markets:
+            by_event.setdefault(m.get("event_ticker", ""), []).append(m)
+        try:
+            games = sp.fetch_odds(series, key)
+        except Exception as exc:  # noqa: BLE001
+            print(f"{series}: odds fetch failed: {exc}")
+            continue
+        matched, unmatched = sp.match_games_to_events(
+            series, games, list(by_event))
+        print(f"\n{series}: {len(games)} games from Pinnacle, "
+              f"{len(matched)} matched to Kalshi events")
+        rows = []
+        for event, game in matched.items():
+            start = datetime.fromisoformat(
+                game["commence_time"].replace("Z", "+00:00"))
+            if (start - now).total_seconds() > args.hours * 3600:
+                continue
+            fair_by_name = sp.fair_probs_from_game(game)
+            if not fair_by_name:
+                continue
+            code_of = {name: sp.CODES[series].get(name, "")
+                       for name in fair_by_name}
+            for m in by_event[event]:
+                leaf = m.get("ticker", "").rsplit("-", 1)[-1]
+                name = next((n for n, c in code_of.items() if c == leaf), None)
+                yb, ya = price_cents(m, "yes_bid"), price_cents(m, "yes_ask")
+                if name is None or yb is None or ya is None \
+                        or not (0 < yb <= ya < 100):
+                    continue
+                out = sp.evaluate(100.0 * fair_by_name[name], yb, ya)
+                out.update({"t": now.isoformat(timespec="seconds"),
+                            "series": series, "ticker": m["ticker"],
+                            "event": event, "book": "pinnacle",
+                            "commence": game["commence_time"]})
+                rows.append(out)
+        rows.sort(key=lambda r: -r["net_edge"])
+        print(f"  {'ticker':<32}{'fair':>6}{'bid':>5}{'ask':>5}{'edge':>7}  side")
+        for r in rows:
+            flag = "  <-- ENTER" if r["net_edge"] >= args.min_edge else ""
+            print(f"  {r['ticker']:<32}{r['fair']:>6}{r['bid']:>5}"
+                  f"{r['ask']:>5}{r['net_edge']:>7}  {r['side']}{flag}")
+        if unmatched:
+            print("  unmatched:", "; ".join(unmatched[:6]))
+        log_rows.extend(rows)
+    if log_rows and not args.no_log:
+        import os as _os
+        path = _os.path.join(kcfg.data_dir, "sports_scans.jsonl")
+        sp.append_scan_log(path, log_rows)
+        print(f"\nlogged {len(log_rows)} rows -> {path}")
+
+
 def cmd_kalshi_weather(args):
     """Fair values + net edges for open KXHIGH* markets from the GEFS+ECMWF
     ensembles at the official settlement stations (measurement only)."""
@@ -434,6 +523,16 @@ def main():
     kw_p.add_argument("--min-edge", type=float, default=3.0,
                       help="flag threshold in cents (phase-0 paper rule: 3)")
 
+    ks_p = sub.add_parser("kalshi-sports-scan",
+                          help="Pinnacle devig vs Kalshi sports quotes (no orders)")
+    ks_p.add_argument("--series", default="", help="KXMLBGAME,KXNFLGAME subset")
+    ks_p.add_argument("--hours", type=float, default=36.0,
+                      help="only games starting within this many hours")
+    ks_p.add_argument("--min-edge", type=float, default=2.0,
+                      help="flag threshold cents (phase-0 sports rule: 2)")
+    ks_p.add_argument("--no-log", action="store_true",
+                      help="skip appending to the forward-sample log")
+
     kwa_p = sub.add_parser("kalshi-weather-archive",
                            help="cache today+tomorrow ensemble day-max pools "
                                 "(run daily; the API keeps members ~4-5 days)")
@@ -466,6 +565,8 @@ def main():
         cmd_screen(args)
     elif args.command == "kalshi-record":
         cmd_kalshi_record(args)
+    elif args.command == "kalshi-sports-scan":
+        cmd_kalshi_sports_scan(args)
     elif args.command == "kalshi-weather":
         cmd_kalshi_weather(args)
     elif args.command == "kalshi-weather-archive":
