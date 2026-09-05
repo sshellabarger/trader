@@ -41,7 +41,7 @@ _MON = {m: i + 1 for i, m in enumerate(
      "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"])}
 
 MLB_CODES = {
-    "Arizona Diamondbacks": "ARI", "Atlanta Braves": "ATL",
+    "Arizona Diamondbacks": "AZ", "Atlanta Braves": "ATL",
     "Baltimore Orioles": "BAL", "Boston Red Sox": "BOS",
     "Chicago Cubs": "CHC", "Chicago White Sox": "CWS",
     "Cincinnati Reds": "CIN", "Cleveland Guardians": "CLE",
