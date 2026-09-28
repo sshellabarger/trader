@@ -151,6 +151,30 @@ Sanity checks after deploy:
     tail -1 data/kalshi/snapshots-$(date -u +%Y%m%d).jsonl
     docker compose run --rm trader python -m trader kalshi-discover
 
+### Scheduled jobs (the recorder does not run these)
+
+The sports forward sample and the weather calibration history only grow if
+these run on a schedule. Neither is a compose service, so add them to cron on
+the droplet (times are UTC):
+
+```
+# /etc/cron.d/trader-kalshi
+# Sports scan 3x/day (~10:00, 16:00, 19:00 ET). 1 Odds-API credit per series
+# per run, so MLB+NFL costs ~6 credits/day (~180/month on the 500 free tier).
+0 14,20,23 * * * root cd /root/trader && docker compose run --rm trader python -m trader kalshi-sports-scan >> /var/log/kalshi-sports.log 2>&1
+# Weather ensemble archive once a day (Open-Meteo keeps members ~4-5 days).
+0 11 * * * root cd /root/trader && docker compose run --rm trader python -m trader kalshi-weather-archive >> /var/log/kalshi-wx.log 2>&1
+```
+
+`kalshi-sports-scan` needs `ODDS_API_KEY` in `.env`.
+
+Check the Oct-1 funding gate at any time (offline, reads `data/kalshi/`):
+
+    docker compose run --rm trader python -m trader kalshi-gate
+
+It prints PASS/FAIL for each criterion: ≥30 settled paper trades, profit
+factor ≥ 1.3 at taker fills after fees, and model Brier below market Brier.
+
 Tune series/cadence via the `KALSHI_*` block in `.env.example`. A series that
 lists nothing (off-season NFL, renamed ticker) logs a WARNING once per day —
 that is expected until the season's markets list, not a failure.
