@@ -11,6 +11,7 @@ Usage:
   python -m trader kalshi-discover --category "Climate and Weather"
   python -m trader kalshi-weather               # weather fair values vs market
   python -m trader kalshi-sports-scan           # Pinnacle devig vs Kalshi sports
+  python -m trader kalshi-gate                  # sports sample vs the Oct-1 gate
   python -m trader kalshi-weather-backtest --inputs data/kalshi_wk2/weather_backtest_inputs.csv
 """
 from __future__ import annotations
@@ -404,6 +405,22 @@ def cmd_kalshi_weather_backtest(args):
     wb.report(result)
 
 
+def cmd_kalshi_gate(args):
+    """Score the sports forward sample (scan log joined to settlements)
+    against the Oct-1 funding gate. Offline: reads data/kalshi only."""
+    import os
+    from .kalshi.config import KalshiConfig
+    from .kalshi import gate
+
+    setup_logging(args.log_level)
+    data_dir = args.data_dir or KalshiConfig().data_dir
+    result = gate.score(
+        gate.load_jsonl(os.path.join(data_dir, "sports_scans.jsonl")),
+        gate.load_jsonl(os.path.join(data_dir, "settlements.jsonl")),
+        min_edge=args.min_edge, stake_cents=int(round(args.stake * 100)))
+    gate.report(result)
+
+
 def cmd_kalshi_discover(args):
     """List current Kalshi series so KALSHI_SERIES can be set without guessing
     tickers (naming drifts: HIGHCHI died, KXHIGHCHI is live)."""
@@ -546,6 +563,16 @@ def main():
                        help="archived-ensemble cache directory")
     kwb_p.add_argument("--min-edge", type=float, default=3.0)
 
+    kg_p = sub.add_parser("kalshi-gate",
+                          help="score the sports forward sample vs the Oct-1 gate")
+    kg_p.add_argument("--data-dir", default="",
+                      help="directory with sports_scans.jsonl + settlements.jsonl "
+                           "(default: KALSHI_DATA_DIR or data/kalshi)")
+    kg_p.add_argument("--min-edge", type=float, default=2.0,
+                      help="paper entry threshold cents (phase-0 sports rule: 2)")
+    kg_p.add_argument("--stake", type=float, default=25.0,
+                      help="dollars per paper trade")
+
     kd_p = sub.add_parser("kalshi-discover",
                           help="list Kalshi series tickers by category")
     kd_p.add_argument("--category", default="",
@@ -575,6 +602,8 @@ def main():
         _wb.archive_today(args.cache_dir)
     elif args.command == "kalshi-weather-backtest":
         cmd_kalshi_weather_backtest(args)
+    elif args.command == "kalshi-gate":
+        cmd_kalshi_gate(args)
     elif args.command == "kalshi-discover":
         cmd_kalshi_discover(args)
     else:

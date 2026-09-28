@@ -1,5 +1,42 @@
 # Trader — Progress Log
 
+## Current status (updated 2026-09-28)
+
+Entries below the status block are in date order, oldest first. This block is
+the one to keep current.
+
+**Stock bot (Alpaca paper).** Runs on the droplet. Code defaults: TQQQ ORB
+only (the SQQQ leg was turned on 2026-06-21, then off again by default on
+2026-07-01), premarket overnight-gap gate. Optional and env-toggled: the
+scanner-driven stock sleeve (long-only gap-ups, news hot-list) and the
+graduated ATR range band (`ORB_RANGE_BAND_ATR`). The fixed 0.5–1.2% band lost
+out of sample (PF 0.48) and the ATR band is its replacement. What the droplet's
+`.env` actually enables is not visible from the repo. The June "trade-selection regression"
+(Finding 2 below) was never confirmed or ruled out on real bars.
+
+**Kalshi sleeve (phase 0, measurement only, no orders).**
+- Recorder running 24/7 since 2026-07-28; prices captured from 2026-08-02 on
+  (the first week recorded no prices after an API schema change).
+- Weather model: loses to the market (paper PF 0.42 on the first recorded
+  week). Only path left is per-station calibration on accumulated settled
+  days, which needs `kalshi-weather-archive` to run every day.
+- Sports model: Pinnacle devig vs Kalshi. First scan showed every net edge
+  negative at taker prices; the two venues agree within ~1c.
+- **Funding gate, Oct 1:** ≥30 settled paper trades, PF ≥ 1.3 after fees at
+  conservative fills, model Brier < market Brier. `kalshi-gate` (added
+  2026-09-28) scores the sports forward sample against it.
+
+**Open items, most important first**
+1. Run `kalshi-gate` on the droplet data before Oct 1 and record the verdict.
+   On current evidence expect a FAIL and a pushed-back gate, not funding.
+2. Confirm the sports scan and weather archive actually run on a schedule.
+   Neither is in `docker-compose.yml`; see the cron lines in `DEPLOY.md`.
+3. Review stock-bot paper results since July (journals in `trade_logs/`).
+4. Commit a small cached-bars fixture so backtests run offline (still open
+   from June).
+
+---
+
 ## 2026-06-13 — ORB opening-range %-band filter (autonomous session)
 
 ### TL;DR
@@ -224,3 +261,82 @@ project root created a stray `.git` the sandbox mount would not let me delete
 (unlink not permitted). It is **not** the real repo — please `rm -rf` the outer
 `<project-root>/.git` and `<project-root>/.gitignore` on your Mac if they appear;
 the canonical history is under `trader/.git`.
+
+---
+
+## 2026-06-15 → 06-22 — Live fixes, overnight gate, Docker deploy
+
+Reconstructed from commit messages.
+
+- **Phantom journal close (06-15).** A bracket entry that took 4 minutes to fill
+  was reconciled as closed, and a stale prior-session sell was booked as a
+  −$9,615 take-profit (the real trade made +$964 at EOD). The engine now skips
+  reconciliation while entry orders are working, and `last_filled_exit` only
+  looks at fills after this trade's entry.
+- **Overnight-drift filter + Docker/Compose deploy (06-18).** Entry gate on the
+  overnight gap, overnight-hold support in the backtester, CLI flags, and the
+  `DEPLOY.md` droplet runbook.
+- **Journal permission crash (06-19).** The bind-mounted `trade_logs` was
+  root-owned, `save_daily_summary` raised every tick and wedged the loop. Save
+  errors no longer block the day rollover; an entrypoint chowns the mount and
+  drops to the `trader` user via gosu.
+- **SQQQ leg on + premarket gap (06-21/22).** At user request the SQQQ leg was
+  enabled. The overnight gap now comes from QQQ premarket prints (the old
+  daily-bar version didn't exist at `_new_day` time, so the gate was inert
+  live) and is symbol-aware (bull needs an up gap, bear a down gap). Dead
+  top-level `orb.py` removed. 66 tests.
+
+## 2026-06-29 → 07-22 — Stock sleeve
+
+- **Sleeve (06-29).** Stocks-only, scanner-driven ORB sleeve (default off), a
+  weekly liquidity+volatility pool screener (`screen-universe`), and a news
+  catalyst layer (hot-list + negative-headline long gate, default off).
+- **07-01.** Richer daily journal `context` block; sleeve pool restricted to
+  IEX-liquid names (low-float names return no bars on IEX). Security hardening
+  and honest fill modeling in the backtester. **SQQQ leg back off by default.**
+- **EOD flatten verify (07-19).** On Jul 9 a COIN position survived `close_all`
+  and was held overnight. The engine now re-checks and re-closes survivors.
+- **Long-bias picks (07-19).** The long-only ORB now only takes gap-up names.
+- **Sleeve replay backtester (07-22).** Scanner simulation + ORB replay with
+  a train/test sweep. Reconstructed premarket rvol is a ranking weight, never a
+  floor (IEX premarket maxes at ~0.095× prior day, so the live 0.5 floor vetoed
+  every session). Verdict: the **ATR 0.15–0.75 band graduates** (train PF 1.13
+  n=179 / test PF 1.15 n=83); the fixed 0.5–1.2% band scored test PF 0.48 and
+  is retired. Live engine fetches daily ATR once per pick after the morning
+  scan (fail-open to the fixed band). Broker keys excluded from config repr
+  after a pytest failure printed them. 155 tests.
+
+## 2026-07-28 → 09-05 — Kalshi prediction-market sleeve (phase 0)
+
+- **Recorder (07-28).** `trader/kalshi/`: public-data REST client, 24/7 JSONL
+  recorder (hot/base cadence, order-book snapshots near close, daily
+  settlement sweep), `kalshi-record` / `kalshi-discover`, compose service.
+  No credentials, no orders. **Gate before any funding (Oct 1): ≥30 settled
+  paper trades, PF ≥ 1.3 after fees at conservative fills, model Brier <
+  market Brier.**
+- **Schema fix (08-02).** Kalshi moved to `*_dollars` / `*_fp` fields and
+  `orderbook_fp`. The first week (Jul 28–Aug 2, 2.07M lines) recorded no
+  prices. Client now reads both generations; the recorder logs an ERROR when a
+  poll returns markets with no recognizable prices. 175 tests.
+- **Weather model (08-10).** GEFS(31)+ECMWF(51) ensemble day-max at the
+  official NWS settlement stations. First honest score (identity knobs,
+  n≈44/horizon): model/market Brier 0.113/0.105 @12Z, 0.110/0.080 @15Z,
+  0.113/0.083 @18Z, 0.123/0.057 @21Z; paper sim 54 trades, **PF 0.42**. The
+  market watches the thermometer through the day; a static morning ensemble
+  can't. Open-Meteo keeps member values only ~4–5 days, so calibration history
+  exists only if `kalshi-weather-archive` runs daily. 184 tests.
+- **Sports model (09-05).** Pinnacle moneylines (The Odds API, 1 credit per
+  series per scan) with power-method devig, Kalshi ticker matching incl.
+  doubleheaders, same net-edge rule as weather. `kalshi-sports-scan` appends
+  every row to `data/kalshi/sports_scans.jsonl` (the free odds tier has no
+  history, so the sample accrues forward only). Recorder hot windows now
+  anchor on `min(close_time, expected_expiration_time)` so games get 10s
+  cadence. First scan: 14/15 matched (15/15 after the AZ ticker fix), every
+  net edge −1.6 to −2.4c. Market baseline to beat: Brier 0.2411 at game start
+  (427 settled games). 191 tests.
+
+## 2026-09-28 — Progress log catch-up + gate scorer
+
+- This status block and the history above.
+- `kalshi-gate`: joins the sports forward sample to recorded settlements and
+  reports each Oct-1 gate criterion (see `trader/kalshi/gate.py`).
