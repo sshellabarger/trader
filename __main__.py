@@ -13,6 +13,11 @@ Usage:
   python -m trader kalshi-sports-scan           # Pinnacle devig vs Kalshi sports
   python -m trader kalshi-gate                  # sports sample vs the Oct-1 gate
   python -m trader kalshi-weather-backtest --inputs data/kalshi_wk2/weather_backtest_inputs.csv
+  python -m trader schedule                     # daemon: 09:35 core rebalance, 16:15 heartbeat
+  python -m trader heartbeat [--no-send]        # one daily report now
+  python -m trader core-rebalance [--dry-run]   # one core rebalance now
+  python -m trader core-status                  # core targets/trend/plan, no orders
+  python -m trader ira-review [--no-send]       # read-only IRA review now
 """
 from __future__ import annotations
 
@@ -438,6 +443,88 @@ def cmd_kalshi_discover(args):
             print(f"  {s.get('ticker', '?'):28s} {s.get('title', '')[:70]}")
 
 
+def cmd_schedule(args):
+    """Daemon for the slow daily jobs (see scheduler.py)."""
+    from .scheduler import Scheduler
+
+    config = Config()
+    config.dry_run = args.dry_run
+    setup_logging(args.log_level)
+    Scheduler(config).run_forever(interval_s=args.interval)
+
+
+def cmd_heartbeat(args):
+    from . import heartbeat
+
+    setup_logging(args.log_level)
+    hb = heartbeat.run(Config(), send=not args.no_send, with_news=not args.no_news,
+                       with_ira=(None if args.ira is None else args.ira))
+    if args.no_send:
+        print(heartbeat.render_text(hb))
+        print("\nPUSH:", heartbeat.render_push(hb))
+
+
+def cmd_core_rebalance(args):
+    from .broker import AlpacaBroker
+    from .core import CorePortfolio
+    from .notify import Notifier
+
+    config = Config()
+    setup_logging(args.log_level)
+    if not config.core.enabled:
+        print("CORE_ENABLED is not true in .env; nothing to do.")
+        return
+    core = CorePortfolio(config, AlpacaBroker(config.broker), Notifier())
+    placed = core.rebalance(dry_run=args.dry_run)
+    tag = "would place" if args.dry_run else "placed"
+    print(f"{tag} {len(placed)} order(s)")
+    for t in placed:
+        print(f"  {t.side:4s} {t.quantity:>6d} {t.symbol:6s} ~${t.est_value:>10,.0f}  {t.reason}")
+
+
+def cmd_core_status(args):
+    from .broker import AlpacaBroker
+    from .core import CorePortfolio
+
+    config = Config()
+    setup_logging(args.log_level)
+    core = CorePortfolio(config, AlpacaBroker(config.broker))
+    if not config.core.enabled:
+        print("CORE_ENABLED is not true; showing what the model WOULD target.")
+        config.core.enabled = True
+    snap = core.snapshot()
+    print(f"equity ${snap['equity']:,.0f}  core ${snap['core_value']:,.0f} "
+          f"({snap['core_pct']:.1f}% of {snap['alloc_pct']:.0f}% allocation)  "
+          f"trend gate {'sma' + str(snap['trend_sma']) if snap['trend_gate'] else 'off'}")
+    print("sym    target   eff    actual  trend    close      sma     action")
+    for v in snap["views"]:
+        t = v.trend
+        print(f"{v.symbol:6s} {v.target_pct:5.1f}%  {v.effective_pct:5.1f}%  {v.actual_pct:5.1f}%  "
+              f"{t.label:7s} {t.close or 0:>8.2f} {t.sma or 0:>8.2f}  {v.action}")
+    if snap["trades"]:
+        print("plan:", "; ".join(f"{t.side} {t.quantity} {t.symbol}" for t in snap["trades"]))
+    else:
+        print("plan: no trades")
+
+
+def cmd_ira_review(args):
+    from .advisor import daily_review as ira
+    from .broker import AlpacaBroker
+    from .notify import Notifier
+
+    config = Config()
+    setup_logging(args.log_level)
+    r = ira.build_review(AlpacaBroker(config.broker), api_key=config.broker.api_key,
+                         api_secret=config.broker.api_secret, band=args.band,
+                         min_dollars=args.min_dollars, csv_path=args.positions_csv,
+                         with_news=not args.no_news)
+    text = ira.render_text(r)
+    print(text)
+    if not args.no_send:
+        Notifier().send(f"[IRA] review {r.as_of[:10]}: {len(r.trades)} proposals",
+                        text, push_body=ira.render_push(r))
+
+
 def main():
     parser = argparse.ArgumentParser(description="DayTrader v2 — ETF Edition")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
@@ -578,6 +665,29 @@ def main():
     kd_p.add_argument("--category", default="",
                       help='e.g. "Climate and Weather", "Economics", "Sports"')
 
+    sch_p = sub.add_parser("schedule", help="Daemon: daily core rebalance + heartbeat")
+    sch_p.add_argument("--interval", type=int, default=30, help="Loop interval seconds")
+    sch_p.add_argument("--dry-run", action="store_true", help="Plan core trades, place nothing")
+
+    hb_p = sub.add_parser("heartbeat", help="Send (or print) today's heartbeat report")
+    hb_p.add_argument("--no-send", action="store_true", help="Print only")
+    hb_p.add_argument("--no-news", action="store_true", help="Skip the news digest")
+    hb_p.add_argument("--ira", dest="ira", action="store_true", default=None,
+                      help="Include the IRA review (default: IRA_REVIEW_ENABLED)")
+    hb_p.add_argument("--no-ira", dest="ira", action="store_false")
+
+    cr_p = sub.add_parser("core-rebalance", help="Rebalance the held core now")
+    cr_p.add_argument("--dry-run", action="store_true", help="Plan only, place nothing")
+
+    sub.add_parser("core-status", help="Show core targets, trend and the pending plan")
+
+    ir_p = sub.add_parser("ira-review", help="Read-only IRA review (propose only)")
+    ir_p.add_argument("--no-send", action="store_true", help="Print only")
+    ir_p.add_argument("--no-news", action="store_true")
+    ir_p.add_argument("--band", type=float, default=0.25, help="Relative drift band")
+    ir_p.add_argument("--min-dollars", type=float, default=500.0)
+    ir_p.add_argument("--positions-csv", default=None, help="Offline positions export")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -606,6 +716,16 @@ def main():
         cmd_kalshi_gate(args)
     elif args.command == "kalshi-discover":
         cmd_kalshi_discover(args)
+    elif args.command == "schedule":
+        cmd_schedule(args)
+    elif args.command == "heartbeat":
+        cmd_heartbeat(args)
+    elif args.command == "core-rebalance":
+        cmd_core_rebalance(args)
+    elif args.command == "core-status":
+        cmd_core_status(args)
+    elif args.command == "ira-review":
+        cmd_ira_review(args)
     else:
         parser.print_help()
 

@@ -493,6 +493,19 @@ class AlpacaBroker:
         acct = self.get_account()
         return float(acct.get("buying_power", 0)) if acct else 0.0
 
+    def get_portfolio_history(self, period: str = "3M", timeframe: str = "1D") -> Optional[Dict]:
+        """Account equity series {timestamp: [...], equity: [...], ...} for
+        the heartbeat's since-inception comparison against buy-and-hold."""
+        return self._request("GET", f"{self.base_url}/v2/account/portfolio/history",
+                             params={"period": period, "timeframe": timeframe})
+
+    def get_calendar(self, start: str, end: str) -> List[Dict]:
+        """Trading calendar [{date, open, close}, ...] between two YYYY-MM-DD
+        dates (inclusive), so the scheduler knows holidays without guessing."""
+        result = self._request("GET", f"{self.base_url}/v2/calendar",
+                               params={"start": start, "end": end})
+        return result if isinstance(result, list) else []
+
     def mid_price(self, symbol: str) -> Optional[float]:
         """Get mid price from latest quote."""
         q = self.get_latest_quote(symbol)

@@ -65,3 +65,36 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+  # Scheduler: the slow daily jobs the engine doesn't do — 09:35 ET core
+  # rebalance (CORE_ENABLED) and the 16:15 ET heartbeat email/push (+ the
+  # read-only IRA review when IRA_REVIEW_ENABLED). Same image, same .env,
+  # same hardening. Shares ./data (core_state.json, ira cache, Schwab token)
+  # and ./trade_logs (read-only: it reports the engine's journal liveness).
+  scheduler:
+    image: trader:latest
+    container_name: trader-scheduler
+    restart: always
+    depends_on:
+      - trader
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    env_file:
+      - .env
+    command: ["python", "-m", "trader", "schedule"]
+    volumes:
+      - ./data:/app/data
+      - ./trade_logs:/app/trade_logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

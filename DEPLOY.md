@@ -117,6 +117,66 @@ to scan), and `STOCK_SLEEVE_NEWS_BLOCK_BELOW` (the sentiment floor for the entry
 gate). Watch the `News catalysts: N articles -> hot-list [...]` log line to see
 the day's picks.
 
+## Daily heartbeat, held core, and the IRA review (scheduler service)
+
+`docker compose up -d` also starts a third service, `scheduler`, which runs
+the slow daily jobs the always-on engine does not:
+
+| ET time | job | what it does |
+|---|---|---|
+| 09:35, trading days | `core-rebalance` | if `CORE_ENABLED=true`, rebalances the held core on prior-close signals |
+| 16:15, Mon–Fri | `heartbeat` | emails + pushes the daily report; appends the IRA review if `IRA_REVIEW_ENABLED=true` |
+
+**Why the heartbeat exists:** from 2026-07-22 to 2026-10-11 the paper account sat
+at exactly $100,000 with zero orders and nobody noticed. The heartbeat is a
+message a human reads every trading day. It is built from live broker calls,
+so receiving it proves the keys work; the engine also pages on startup if it
+cannot read the account, instead of looping silently.
+
+### Turn it on
+
+1. Fill the `NOTIFY_*`/`SMTP_*`/`NTFY_*` block in `.env` (see `.env.example`;
+   a Gmail **app** password, and/or an unguessable ntfy topic).
+2. `docker compose up -d --build`, then send one by hand to confirm delivery:
+
+       docker compose run --rm scheduler python -m trader heartbeat
+
+   `--no-send` prints it instead. Check `docker compose logs -f scheduler`.
+
+### The held core (optional, `CORE_ENABLED=true`)
+
+The engine is a day trader: everything it opens is flat by the close. The
+core (`trader/core.py`) is the slow book that is HELD: `CORE_ALLOC_PCT`
+(default 70%) of equity in the same target model the IRA follows, each name
+only while above its 200-day average, rebalanced when drift exceeds
+`CORE_BAND` (25% relative) or a trend flips. The engine sizes its intraday
+trades against the remaining 30%, never scans core names as sleeve picks,
+and never flattens core holdings at the close (ownership is recorded in
+`data/core_state.json`). Preview before enabling:
+
+    docker compose run --rm scheduler python -m trader core-status
+    docker compose run --rm scheduler python -m trader core-rebalance --dry-run
+
+Then set `CORE_ENABLED=true` and `docker compose up -d --force-recreate`.
+The first real rebalance happens at the next 09:35 ET; the heartbeat shows
+the plan the afternoon before.
+
+### The IRA review (optional, `IRA_REVIEW_ENABLED=true`)
+
+Read-only. Every heartbeat appends: holdings vs the model, 1d/1w/1m moves,
+200dma trend, a news digest with negatives flagged, and the trades the
+advisor WOULD make. Nothing is placed; to act, run
+`python -m trader.advisor.cli --live --band 0.25` on the Mac and approve each
+trade by hand.
+
+Positions come from Schwab when a valid token is present: put
+`SCHWAB_API_KEY`/`SCHWAB_APP_SECRET` in `.env` and copy the Mac's
+`~/.config/schwab/token.json` to `data/schwab_token.json` on the droplet
+(`scp` or paste via the console). Schwab refresh tokens die after 7 days;
+when that happens the review falls back to the last cached snapshot
+(`data/ira_positions.json`), revalued at current prices, and says so in the
+report. Re-auth on the Mac and re-copy the token to resume live pulls.
+
 ## Updating later
 
 ```bash

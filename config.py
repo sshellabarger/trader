@@ -408,12 +408,64 @@ class BacktestConfig:
 
 
 @dataclass
+class CoreConfig:
+    """Held core portfolio (see core.py): the slow book the intraday engine
+    trades AROUND. Off by default so the validated index profile is unchanged
+    until CORE_ENABLED=true is set on the droplet.
+
+    The default model mirrors the IRA restructure plan in advisor/: the five
+    mega-caps capped at 5% (MSFT 3%) and the remainder in the diversified
+    ETF core, all scaled to `alloc_pct` of account equity. Each name is held
+    only while its close is above its `trend_sma`-day average (the defensive
+    200dma switch from the 2026-07-19 overnight/trend verdict); a name below
+    trend sits in cash rather than being redistributed.
+    """
+    enabled: bool = False
+    # Share of account equity the core may hold. The intraday engine sizes
+    # against the remainder (see Engine._intraday_equity).
+    alloc_pct: float = 70.0
+    # "SYM:weight,..." within the core (need not sum to 1; the rest is cash).
+    # Empty = the IRA model from advisor/model.py.
+    targets: str = ""
+    trend_gate: bool = True
+    trend_sma: int = 200
+    # Relative drift band: rebalance a held name only when |actual - target|
+    # exceeds band * target. Trend flips (enter/exit) always act.
+    band: float = 0.25
+    min_trade_dollars: float = 200.0
+    # Where the core records what it owns, so the engine can tell its own
+    # intraday positions from core holdings (never flattened at the close).
+    state_file: str = "data/core_state.json"
+    # Daily schedule (ET, HH:MM). Rebalance after the open on prior-close
+    # signals (matches the next-open fill convention in the backtests);
+    # heartbeat after the close.
+    rebalance_time: str = "09:35"
+    heartbeat_time: str = "16:15"
+
+    def __post_init__(self):
+        self.enabled = _env_bool("CORE_ENABLED", self.enabled)
+        self.alloc_pct = _env_float("CORE_ALLOC_PCT", self.alloc_pct)
+        self.targets = os.getenv("CORE_TARGETS", self.targets)
+        self.trend_gate = _env_bool("CORE_TREND_GATE", self.trend_gate)
+        self.trend_sma = _env_int("CORE_TREND_SMA", self.trend_sma)
+        self.band = _env_float("CORE_BAND", self.band)
+        self.min_trade_dollars = _env_float("CORE_MIN_TRADE_DOLLARS", self.min_trade_dollars)
+        self.state_file = os.getenv("CORE_STATE_FILE", self.state_file)
+        self.rebalance_time = os.getenv("CORE_REBALANCE_TIME", self.rebalance_time)
+        self.heartbeat_time = os.getenv("HEARTBEAT_TIME", self.heartbeat_time)
+        # Clamp: the core can never be sized beyond the account, and a
+        # negative share disables it rather than inverting the split.
+        self.alloc_pct = max(0.0, min(100.0, self.alloc_pct))
+
+
+@dataclass
 class Config:
     broker: BrokerConfig = field(default_factory=BrokerConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    core: CoreConfig = field(default_factory=CoreConfig)
 
     log_level: str = "INFO"
     log_file: str = "daytrader.log"
@@ -423,7 +475,7 @@ class Config:
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
         cfg = cls()
-        for section_name in ("broker", "scanner", "strategy", "risk", "backtest"):
+        for section_name in ("broker", "scanner", "strategy", "risk", "backtest", "core"):
             section_data = d.get(section_name, {})
             section_obj = getattr(cfg, section_name)
             for k, v in section_data.items():

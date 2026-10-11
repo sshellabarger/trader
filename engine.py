@@ -20,8 +20,10 @@ from zoneinfo import ZoneInfo
 
 from .broker import AlpacaBroker
 from .config import Config
+from .core import CorePortfolio
 from .indicators import compute_indicators
 from .journal import TradeJournal
+from .notify import Notifier
 from .regime import RegimeDetector
 from .risk import RiskManager, PositionInfo, SizeResult
 from .scanner import Candidate, scan_candidates
@@ -56,6 +58,13 @@ class Engine:
         self.broker = AlpacaBroker(config.broker)
         self.risk = RiskManager(config.risk)
         self.journal = TradeJournal()
+        # Outbound alerts (email/ntfy). No-op when unconfigured.
+        self.notifier = Notifier()
+        # The held core (core.py) lives in the same account. The engine only
+        # uses its ownership view here: which symbols are core holdings, so
+        # they are never flattened at the close, never scanned as sleeve
+        # picks, and never counted as intraday exposure.
+        self.core = CorePortfolio(config, self.broker, self.notifier)
 
         # The index instruments. Regime and overnight-gap context stay keyed to
         # the index even when the stock sleeve is what actually trades.
@@ -112,6 +121,13 @@ class Engine:
         # picture is persisted in the daily summary regardless.
         self._sym_status_logged: Dict[str, str] = {}
         self._flatten_requested = False  # EOD liquidation issued for today
+        # 0 = retry the startup account check forever (production); tests
+        # set 1 to get the old fail-fast behaviour.
+        self._startup_retry_limit = 0
+        self._alerted_day: Optional[str] = None  # day an account-read alert went out
+        # Set by the per-symbol flatten so the same tick's sweep doesn't
+        # immediately re-issue closes that were submitted a moment ago.
+        self._skip_sweep_once = False
         self._pending_close: set = set()  # symbols committed to exit, retried each tick
         # symbol → UTC ISO time the entry was submitted; bounds exit-fill lookups
         # so a stale prior-session fill can't be booked as this trade's exit.
@@ -157,23 +173,50 @@ class Engine:
         self._running = False
 
     def _initialize(self):
-        acct = self.broker.get_account()
-        if acct:
-            equity = float(acct.get("equity", 0))
-            bp = float(acct.get("buying_power", 0))
-            logger.info(f"Account: equity=${equity:,.2f}  buying_power=${bp:,.2f}")
-            self.risk.reset_daily(equity)
+        # A dead key used to mean a silent restart loop (2026-08-25 → 10-01:
+        # five weeks of equity_close=0 journals and nobody knew). Now the
+        # first failure pages, the engine keeps retrying with backoff, and
+        # recovery pages too.
+        attempt = 0
+        while self._running:
+            acct = self.broker.get_account()
+            if acct:
+                equity = float(acct.get("equity", 0))
+                bp = float(acct.get("buying_power", 0))
+                logger.info(f"Account: equity=${equity:,.2f}  buying_power=${bp:,.2f}")
+                self.risk.reset_daily(self._intraday_equity(equity))
+                if attempt:
+                    self.notifier.send("[trader] engine: account reachable again",
+                                       f"Connected after {attempt} failed attempt(s). "
+                                       f"equity=${equity:,.2f}")
+                break
+            attempt += 1
+            logger.error("Failed to connect to broker (attempt %d); retrying", attempt)
+            if attempt == 1:
+                self.notifier.alert(
+                    "[trader] engine CANNOT reach the account",
+                    "Alpaca /v2/account returned nothing at startup: bad or rotated "
+                    "APCA_* keys, wrong base URL, or no network. The engine will keep "
+                    "retrying every few minutes and will NOT trade until this clears.")
+            if self._startup_retry_limit and attempt >= self._startup_retry_limit:
+                self._running = False
+                return
+            time.sleep(min(600, 60 * attempt))
         else:
-            logger.error("Failed to connect to broker")
-            self._running = False
             return
 
         logger.info(f"Mode: {'DRY RUN' if self.config.dry_run else 'LIVE'}")
+        logger.info(f"Core: {'ON ' + str(self.config.core.alloc_pct) + '% ' + str(sorted(self.core.targets)) if self.config.core.enabled else 'off'}; "
+                    f"protected symbols now: {sorted(self.core.protected_symbols())}")
 
     def _tick(self):
         today = date.today().isoformat()
         if self._today != today:
             self._new_day(today)
+        # The core rebalances in a separate process; pick up its ownership
+        # changes (a cheap local JSON read) so today's core buys are
+        # protected from this afternoon's flatten.
+        self.core.reload_state()
 
         if not self.broker.is_market_open():
             return
@@ -282,13 +325,21 @@ class Engine:
         self._indicators_cache.clear()
         self._sym_status_logged.clear()
         self._flatten_requested = False
+        self._skip_sweep_once = False
         self._pending_close.clear()
         self._entry_time_utc.clear()
         self._pending_entry_orders.clear()
 
         equity = self.broker.get_equity()
         if equity > 0:
-            self.risk.reset_daily(equity)
+            self.risk.reset_daily(self._intraday_equity(equity))
+        elif self._alerted_day != today:
+            # Previously this fell through silently and the day ran with no
+            # risk baseline and equity_close=0 in the journal.
+            self._alerted_day = today
+            self.notifier.alert("[trader] engine cannot read account equity",
+                                f"get_equity() returned {equity} at the {today} day roll. "
+                                "Check the APCA_* keys on the droplet.")
 
         # Seed the day's journal diary with a config snapshot + opening equity so
         # the persisted summary explains the setup even on a no-trade day. Never
@@ -480,10 +531,14 @@ class Engine:
         if self._sleeve_scanned_day == today:
             return
         universe = self.config.stock_sleeve_scan_universe()
+        protected = self.core.protected_symbols()
+        if protected:
+            universe = [s for s in universe if s not in protected]
         if self.config.strategy.stock_sleeve_news_enabled:
             self._refresh_news()
             if self._news_hotlist:
-                universe = list(dict.fromkeys(list(universe) + self._news_hotlist))
+                universe = list(dict.fromkeys(
+                    list(universe) + [s for s in self._news_hotlist if s not in protected]))
                 logger.info(f"Stock sleeve: +{len(self._news_hotlist)} catalyst names from news")
         if not universe:
             logger.warning("Stock sleeve: empty scan universe; trading nothing today")
@@ -614,7 +669,7 @@ class Engine:
         # feature; in stocks-only sleeve mode skip the QQQ fetch entirely.
         if not self.sleeve_enabled:
             self._ensure_overnight_gap()
-        broker_positions = self.broker.get_positions()
+        broker_positions = self._engine_positions()
         position_map = {p["symbol"]: p for p in broker_positions}
 
         # Evaluate each traded symbol against its own bars so signal prices
@@ -693,7 +748,7 @@ class Engine:
         acct = self.broker.get_account()
         if not acct:
             return
-        equity = float(acct.get("equity", 0))
+        equity = self._intraday_equity(float(acct.get("equity", 0)))
         buying_power = float(acct.get("buying_power", 0))
         positions = self._get_position_infos()
 
@@ -805,7 +860,7 @@ class Engine:
         if not self.journal.open_trades:
             return
 
-        broker_positions = self.broker.get_positions()
+        broker_positions = self._engine_positions()
         position_map = {p["symbol"]: p for p in broker_positions}
 
         for sym, trade_record in list(self.journal.open_trades.items()):
@@ -946,7 +1001,7 @@ class Engine:
     def _retry_pending_closes(self):
         if not self._pending_close:
             return
-        position_map = {p["symbol"]: p for p in self.broker.get_positions()}
+        position_map = {p["symbol"]: p for p in self._engine_positions()}
         for sym in list(self._pending_close):
             pos = position_map.get(sym)
             if pos is None:
@@ -964,10 +1019,30 @@ class Engine:
         verified every closing tick by _sweep_unflattened."""
         if self.config.dry_run or self._flatten_requested:
             return
-        if self.broker.get_positions():
+        all_positions = self.broker.get_positions()
+        core_held, mine = self.core.split_positions(all_positions)
+        if not mine:
+            return
+        if not core_held:
+            # Nothing of the core's on the book: the account-wide liquidation
+            # stays the fastest, most reliable path (one call, broker-side).
             logger.info(f"Flattening all positions: {reason}")
             self.broker.close_all_positions(cancel_orders=True)
-            self._flatten_requested = True
+        else:
+            # The core's holdings stay. Close only what the engine owns, one
+            # position at a time, cancelling its bracket legs first.
+            logger.info(f"Flattening engine positions {[p['symbol'] for p in mine]}: {reason} "
+                        f"(core holdings left in place: {[p['symbol'] for p in core_held]})")
+            for p in mine:
+                sym = str(p.get("symbol", "") or "")
+                if not sym:
+                    continue
+                self.broker.cancel_orders_for_symbol(sym)
+                self._wait_orders_cleared(sym)
+                if not self.broker.close_position(sym):
+                    logger.error(f"EOD close REJECTED for {sym}; the sweep will retry")
+            self._skip_sweep_once = True
+        self._flatten_requested = True
 
     def _sweep_unflattened(self):
         """Verify the EOD flatten completed; re-close anything that survived.
@@ -988,7 +1063,10 @@ class Engine:
         book."""
         if self.config.dry_run or not self._flatten_requested:
             return
-        for pos in self.broker.get_positions():
+        if self._skip_sweep_once:
+            self._skip_sweep_once = False
+            return
+        for pos in self._engine_positions():
             sym = str(pos.get("symbol", "") or "")
             if not sym:
                 continue
@@ -1005,8 +1083,42 @@ class Engine:
                     f"EOD re-close REJECTED for {sym}; will retry next tick"
                 )
 
+    def _engine_positions(self) -> List[Dict]:
+        """Broker positions MINUS the core's holdings: the book this engine
+        owns and may exit. Everything that reasons about 'our positions'
+        goes through here so a core holding can never be journaled,
+        re-closed, or counted as intraday exposure."""
+        _, mine = self.core.split_positions(self.broker.get_positions())
+        return mine
+
+    def _intraday_equity(self, total_equity: float,
+                         positions: Optional[List[Dict]] = None) -> float:
+        """The equity the intraday book is sized and loss-limited against.
+
+        With the core enabled: total equity minus the core's market value
+        (cash + intraday positions), capped at the core's complement
+        (1 - CORE_ALLOC_PCT) of equity so that a core sitting in cash below
+        trend does not hand the ORB engine the whole account. Without the
+        core: total equity, as before."""
+        if not self.config.core.enabled or total_equity <= 0:
+            return total_equity
+        if positions is None:
+            try:
+                positions = self.broker.get_positions()
+            except Exception:  # noqa: BLE001
+                positions = []
+        core_held, _ = self.core.split_positions(positions)
+        core_value = 0.0
+        for p in core_held:
+            try:
+                core_value += float(p.get("market_value", 0) or 0)
+            except (TypeError, ValueError):
+                pass
+        cap = total_equity * (1.0 - self.config.core.alloc_pct / 100.0)
+        return max(0.0, min(total_equity - core_value, cap))
+
     def _get_position_infos(self) -> List[PositionInfo]:
-        positions = self.broker.get_positions()
+        positions = self._engine_positions()
         result = []
         for p in positions:
             try:
