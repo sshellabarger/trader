@@ -174,7 +174,23 @@ advisor WOULD make. Nothing is placed; to act, run
 `python -m trader.advisor.cli --live --band 0.25` on the Mac and approve each
 trade by hand.
 
-Positions come from Schwab when a valid token is present: put
+**Without the Schwab API (the simple way):** on schwab.com open the
+account's Positions page, click **Export**, and put that CSV on the droplet
+as `data/ira_positions.csv`, unchanged. Replace it whenever your holdings
+change. The report shows the export's "as of" date so a stale file is
+obvious; prices, trend and news come from Alpaca, so nothing else is
+needed. To get the file onto the droplet without scp, paste it through the
+console:
+
+    cat > data/ira_positions.csv <<'EOF'
+    (paste the whole CSV here)
+    EOF
+
+then preview with `docker compose run --rm scheduler python -m trader ira-review --no-send`.
+A hand-typed `data/ira_holdings.txt` (`SYMBOL SHARES` per line, `CASH 12345`)
+is also accepted when no CSV is present.
+
+**With the Schwab API (optional):** positions come from Schwab when a valid token is present: put
 `SCHWAB_API_KEY`/`SCHWAB_APP_SECRET` in `.env` and copy the Mac's
 `~/.config/schwab/token.json` to `data/schwab_token.json` on the droplet
 (`scp` or paste via the console). Schwab refresh tokens die after 7 days;
@@ -215,30 +231,6 @@ Sanity checks after deploy:
     docker compose logs -f kalshi-recorder      # "Kalshi recorder up: ..."
     tail -1 data/kalshi/snapshots-$(date -u +%Y%m%d).jsonl
     docker compose run --rm trader python -m trader kalshi-discover
-
-### Scheduled jobs (the recorder does not run these)
-
-The sports forward sample and the weather calibration history only grow if
-these run on a schedule. Neither is a compose service, so add them to cron on
-the droplet (times are UTC):
-
-```
-# /etc/cron.d/trader-kalshi
-# Sports scan 3x/day (~10:00, 16:00, 19:00 ET). 1 Odds-API credit per series
-# per run, so MLB+NFL costs ~6 credits/day (~180/month on the 500 free tier).
-0 14,20,23 * * * root cd /root/trader && docker compose run --rm trader python -m trader kalshi-sports-scan >> /var/log/kalshi-sports.log 2>&1
-# Weather ensemble archive once a day (Open-Meteo keeps members ~4-5 days).
-0 11 * * * root cd /root/trader && docker compose run --rm trader python -m trader kalshi-weather-archive >> /var/log/kalshi-wx.log 2>&1
-```
-
-`kalshi-sports-scan` needs `ODDS_API_KEY` in `.env`.
-
-Check the Oct-1 funding gate at any time (offline, reads `data/kalshi/`):
-
-    docker compose run --rm trader python -m trader kalshi-gate
-
-It prints PASS/FAIL for each criterion: ≥30 settled paper trades, profit
-factor ≥ 1.3 at taker fills after fees, and model Brier below market Brier.
 
 Tune series/cadence via the `KALSHI_*` block in `.env.example`. A series that
 lists nothing (off-season NFL, renamed ticker) logs a WARNING once per day —

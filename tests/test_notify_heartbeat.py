@@ -7,6 +7,8 @@ secret into its error text.
 """
 import datetime as _dt
 import json
+
+import pytest
 from zoneinfo import ZoneInfo
 
 from trader import heartbeat as hb
@@ -288,7 +290,7 @@ def test_ira_review_from_csv_proposes_without_trading(tmp_path, monkeypatch):
                          band=0.25, min_dollars=100, with_news=False)
     text = ira.render_text(r)
 
-    assert r.source.startswith("csv")
+    assert r.source.startswith("Schwab export")
     assert r.total == 126_000.0 and r.cash == 5_000.0   # revalued at the 110 close
     syms = {t.symbol: t for t in r.trades}
     assert syms["JUNK"].side == "SELL" and syms["JUNK"].quantity == 100
@@ -318,3 +320,91 @@ def test_ira_review_without_any_source(tmp_path, monkeypatch):
     r = ira.build_review(_Broker(), api_key="", api_secret="", with_news=False)
     assert r.source == "none" and r.trades == []
     assert "no IRA position source" in ira.render_text(r)
+
+
+def test_ira_review_from_manual_holdings_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SCHWAB_API_KEY", raising=False)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "ira_holdings.txt").write_text(
+        "# my IRA\nAAPL 550.8588\nSPY, 100\nCASH 5000\nJUNK 10   # tail\n")
+    broker = _Broker()
+    r = ira.build_review(broker, api_key="", api_secret="", band=0.25,
+                         min_dollars=100, with_news=False)
+    assert r.source.startswith("manual file")
+    # 660.8588 shares priced at the 110 close + cash
+    assert r.total == pytest.approx(660.8588 * 110 + 5000)
+    assert r.cash == 5000.0
+    syms = {t.symbol: t for t in r.trades}
+    assert syms["JUNK"].side == "SELL" and syms["JUNK"].quantity == 10
+    assert "edit that file when you trade" in ira.render_text(r)
+    assert broker.orders == []
+
+
+def test_manual_holdings_file_beats_stale_cache(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SCHWAB_API_KEY", raising=False)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "ira_positions.json").write_text(json.dumps({
+        "positions": {"OLD": {"qty": 1, "value": 1, "price": 1}}, "cash": 0,
+        "fetched_at": "2026-01-01T00:00:00+00:00"}))
+    (tmp_path / "data" / "ira_holdings.txt").write_text("SPY 1\n")
+    r = ira.build_review(_Broker(), api_key="", api_secret="", with_news=False)
+    assert r.source.startswith("manual file")
+    assert [h.symbol for h in r.holdings] == ["SPY"]
+
+
+def test_manual_holdings_bad_line_is_reported_not_fatal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SCHWAB_API_KEY", raising=False)
+    monkeypatch.delenv("IRA_POSITIONS_CSV", raising=False)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "ira_holdings.txt").write_text("AAPL\n")
+    r = ira.build_review(_Broker(), api_key="", api_secret="", with_news=False)
+    assert r.source == "none"
+    assert any("cannot read a share count" in w for w in r.warnings)
+
+
+def test_schwab_csv_with_preamble_line(tmp_path):
+    from trader.advisor.model import load_positions_csv
+    p = tmp_path / "export.csv"
+    p.write_text('"Positions for account Rollover IRA ...3948 as of 10:00 AM ET, 2026/10/11"\n'
+                 '\nSymbol,Description,Qty (Quantity),Price,Mkt Val (Market Value)\n'
+                 'AAPL,APPLE INC,10,100,"$1,000.00"\n'
+                 'Account Total,,,,"$1,000.00"\n')
+    pos, cash = load_positions_csv(str(p))
+    assert pos == {"AAPL": {"qty": 10.0, "value": 1000.0, "price": 100.0}}   # footer row dropped
+    assert cash == 0.0
+
+
+def test_schwab_csv_real_shape_cash_pending_and_class_shares(tmp_path, monkeypatch):
+    from trader.advisor.model import load_positions_csv
+    from trader.advisor.daily_review import _export_date
+    p = tmp_path / "Rollover_IRA-Positions.csv"
+    p.write_text(
+        '"Positions for account Rollover IRA ...978 as of 12:56 PM ET, 2026/10/11"\n\n'
+        '"Symbol","Description","Qty (Quantity)","Price","Mkt Val (Market Value)","Asset Type",\n'
+        '"AMZN","AMAZON.COM INC","1,022.0226","262.43","$268,209.39","Equity",\n'
+        '"MOG/A","MOOG INC CLASS A","14.8825","363.09","$5,403.69","Equity",\n'
+        '"NO NUMBER","MEDTRONIC PLC XXXSUBMITTED- SHARES","67","88.48","$5,928.16","Equity",\n'
+        '"Cash & Cash Investments","--","--","--","$145,011.87","Cash and Money Market",\n'
+        '"Positions Total","","--","--","$1,475,571.90","--",\n')
+    pos, cash = load_positions_csv(str(p))
+    assert set(pos) == {"AMZN", "MOG.A"}            # pending row and totals dropped
+    assert pos["AMZN"]["qty"] == 1022.0226
+    assert cash == 145_011.87
+    assert _export_date(str(p)) == "2026-10-11"
+
+
+def test_csv_default_path_beats_manual_holdings(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SCHWAB_API_KEY", raising=False)
+    monkeypatch.delenv("IRA_POSITIONS_CSV", raising=False)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "ira_holdings.txt").write_text("SPY 1\n")
+    (tmp_path / "data" / "ira_positions.csv").write_text(
+        "Symbol,Description,Qty (Quantity),Price,Mkt Val (Market Value)\n"
+        "AAPL,APPLE,10,100,\"$1,000.00\"\n")
+    r = ira.build_review(_Broker(), api_key="", api_secret="", with_news=False)
+    assert r.source.startswith("Schwab export")
+    assert [h.symbol for h in r.holdings] == ["AAPL"]
