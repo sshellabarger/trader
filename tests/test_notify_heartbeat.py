@@ -63,11 +63,42 @@ def test_notifier_push_failure_is_contained_and_scrubbed(caplog):
     assert "secret-topic" not in caplog.text or "***" in caplog.text
 
 
+class _JsonSession(_Session):
+    def post(self, url, data=None, headers=None, timeout=None, json=None):
+        self.posts.append((url, json))
+        return _Resp(self.code)
+
+
+def test_notifier_telegram_full_body_in_chunks():
+    cfg = NotifyConfig(telegram_token="123:abc", telegram_chat_id="42")
+    sess = _JsonSession()
+    n = Notifier(cfg, session=sess)
+    body = "\n".join(f"line {i} <b> & more" for i in range(400))      # ~8k chars
+    assert n.send("hb", body) == {"telegram": True}
+    assert len(sess.posts) >= 2                                       # chunked
+    url, payload = sess.posts[0]
+    assert "123:abc" in url and payload["chat_id"] == "42"
+    assert payload["text"].startswith("<b>hb</b>\n<pre>")
+    assert "&lt;b&gt; &amp;" in payload["text"]                       # escaped
+    assert all(len(p["text"]) < 4096 for _, p in sess.posts)
+    joined = "".join(p["text"] for _, p in sess.posts)
+    assert "line 399" in joined                                       # nothing dropped
+
+
+def test_notifier_telegram_failure_scrubs_token(caplog):
+    cfg = NotifyConfig(telegram_token="123:abc", telegram_chat_id="42")
+    n = Notifier(cfg, session=_JsonSession(code=400))
+    assert n.send("hb", "x") == {"telegram": False}
+    assert "123:abc" not in caplog.text
+
+
 def test_notifier_describe_hides_secrets():
-    cfg = NotifyConfig(email_to="a@b.c", smtp_user="u", smtp_password="pw", ntfy_topic="t0p")
+    cfg = NotifyConfig(email_to="a@b.c", smtp_user="u", smtp_password="pw", ntfy_topic="t0p",
+                       telegram_token="9:tok", telegram_chat_id="7")
     d = cfg.describe()
-    assert "a@b.c" in d and "pw" not in d and "t0p" not in d
-    assert "pw" not in repr(cfg) and "t0p" not in repr(cfg)
+    assert "telegram" in d and "a@b.c" in d
+    for secret in ("pw", "t0p", "9:tok"):
+        assert secret not in d and secret not in repr(cfg)
 
 
 # ----------------------------------------------------------------- heartbeat

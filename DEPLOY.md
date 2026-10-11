@@ -135,8 +135,13 @@ cannot read the account, instead of looping silently.
 
 ### Turn it on
 
-1. Fill the `NOTIFY_*`/`SMTP_*`/`NTFY_*` block in `.env` (see `.env.example`;
-   a Gmail **app** password, and/or an unguessable ntfy topic).
+1. Pick a channel in `.env` (see `.env.example`). Telegram is the one to
+   have: it carries the full report. Create a bot with @BotFather, send it
+   one message, then read your chat id from
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` and set
+   `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Add an unguessable `NTFY_TOPIC`
+   for a short phone push as well, if you like. No Google account is needed
+   anywhere; SMTP is optional and works with any provider.
 2. `docker compose up -d --build`, then send one by hand to confirm delivery:
 
        docker compose run --rm scheduler python -m trader heartbeat
