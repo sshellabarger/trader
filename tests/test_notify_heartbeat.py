@@ -287,17 +287,58 @@ def test_ira_review_from_csv_proposes_without_trading(tmp_path, monkeypatch):
     )
     broker = _Broker()
     r = ira.build_review(broker, api_key="", api_secret="", csv_path=str(csv),
-                         band=0.25, min_dollars=100, with_news=False)
+                         band=0.25, min_dollars=100, with_news=False, mode="model")
     text = ira.render_text(r)
 
-    assert r.source.startswith("Schwab export")
+    assert r.source.startswith("Schwab export") and r.mode == "model"
     assert r.total == 126_000.0 and r.cash == 5_000.0   # revalued at the 110 close
     syms = {t.symbol: t for t in r.trades}
     assert syms["JUNK"].side == "SELL" and syms["JUNK"].quantity == 100
-    assert syms["AMZN"].side == "SELL"                   # 91% -> trim toward 5%
+    assert syms["AMZN"].side == "SELL"                   # 87% -> trim toward 5%
     assert any(t.side == "BUY" and t.symbol == "SPY" for t in r.trades)
     assert "propose-only" in text and "approve each trade" in text
+    assert [h.symbol for h in r.concentrated] == ["AMZN"]
     assert broker.orders == []
+
+
+def test_ira_hold_mode_has_no_trade_list_but_keeps_the_plan(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SCHWAB_API_KEY", raising=False)
+    monkeypatch.delenv("IRA_MODE", raising=False)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "ira_positions.csv").write_text(
+        "Symbol,Description,Qty (Quantity),Price,Mkt Val (Market Value)\n"
+        "AMZN,AMAZON,1000,100,\"$100,000.00\"\nJUNK,JUNK CO,100,100,\"$10,000.00\"\n")
+    r = ira.build_review(_Broker(), api_key="", api_secret="", with_news=False)
+    text = ira.render_text(r)
+    assert r.mode == "hold"
+    assert r.trades == [] and r.model_trades            # plan computed, not proposed
+    assert "HOLD mode" in text and "Model plan, for reference" in text
+    assert "Suggestions" not in text                      # merged into the flagged block
+    assert "approve each trade" not in text
+    assert "to review" in ira.render_push(r)
+
+
+def test_model_mode_withholds_buys_below_trend(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SCHWAB_API_KEY", raising=False)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "ira_positions.csv").write_text(
+        "Symbol,Description,Qty (Quantity),Price,Mkt Val (Market Value)\n"
+        "AMZN,AMAZON,1000,100,\"$100,000.00\"\n")
+    broker = _Broker()
+    falling = {"GLD", "TLT"}
+    orig = broker.get_bars
+
+    def bars(symbol, timeframe="1Min", **kw):
+        if symbol in falling and timeframe == "1Day":
+            return _bars([100.0] * 200 + [80.0] * 10)   # below its 200dma
+        return orig(symbol, timeframe=timeframe, **kw)
+    broker.get_bars = bars
+    r = ira.build_review(broker, api_key="", api_secret="", with_news=False, mode="model")
+    buys = {t.symbol for t in r.trades if t.side == "BUY"}
+    assert "SPY" in buys and not (buys & falling)
+    assert "withheld" in ira.render_text(r)
 
 
 def test_ira_review_falls_back_to_cache(tmp_path, monkeypatch):
@@ -335,7 +376,7 @@ def test_ira_review_from_manual_holdings_file(tmp_path, monkeypatch):
     # 660.8588 shares priced at the 110 close + cash
     assert r.total == pytest.approx(660.8588 * 110 + 5000)
     assert r.cash == 5000.0
-    syms = {t.symbol: t for t in r.trades}
+    syms = {t.symbol: t for t in r.model_trades}
     assert syms["JUNK"].side == "SELL" and syms["JUNK"].quantity == 10
     assert "edit that file when you trade" in ira.render_text(r)
     assert broker.orders == []

@@ -5,6 +5,15 @@ PROPOSE ONLY. This module has no path to an order. Scott reads the report
 and, if he agrees, runs `python -m trader.advisor.cli --live` on the Mac
 and approves each trade by hand.
 
+Two modes (IRA_MODE):
+  hold  (default) What you own is the baseline. The report flags trend
+        breaks, negative news and concentration, and lists the names worth a
+        decision; the model's restructure appears only as a short reference
+        footer. Nothing nags you to liquidate 90 positions every evening.
+  model The restructure plan is the target: trims, exits and buys at
+        IRA_BAND, with the same 200dma gate on BUYS the paper core uses, so
+        it never proposes buying a name that is below trend.
+
 Positions come from, in order:
   1. Schwab (REST, read-only) when SCHWAB_API_KEY/SCHWAB_APP_SECRET and a
      token file are present. A successful pull is cached to
@@ -57,14 +66,21 @@ class HoldingView:
 @dataclass
 class IRAReview:
     as_of: str
-    source: str                      # "schwab" | "cache (YYYY-MM-DD)" | "csv" | "none"
+    source: str                      # "schwab" | "Schwab export dated ..." | "cache (...)" | "none"
     total: float = 0.0
     cash: float = 0.0
     account: str = ""
     band: float = 0.25
+    mode: str = "hold"
     holdings: List[HoldingView] = field(default_factory=list)
-    trades: List[Trade] = field(default_factory=list)
+    trades: List[Trade] = field(default_factory=list)        # proposals in THIS mode
+    model_trades: List[Trade] = field(default_factory=list)  # the restructure plan, for reference
     warnings: List[str] = field(default_factory=list)
+    concentration_limit_pct: float = 10.0
+
+    @property
+    def concentrated(self) -> List["HoldingView"]:
+        return [h for h in self.holdings if h.pct >= self.concentration_limit_pct]
 
     @property
     def flagged(self) -> List[HoldingView]:
@@ -185,11 +201,21 @@ def build_review(broker, *, api_key: str, api_secret: str,
                  csv_path: Optional[str] = None,
                  holdings_path: Optional[str] = None,
                  sma_n: int = 200, news_hours: int = 36,
-                 with_news: bool = True) -> IRAReview:
+                 with_news: bool = True, mode: Optional[str] = None,
+                 concentration_limit_pct: Optional[float] = None) -> IRAReview:
     targets = targets or (parse_targets(os.getenv("IRA_TARGETS", "")) or default_targets())
+    mode = (mode or os.getenv("IRA_MODE", "hold")).strip().lower()
+    if mode not in ("hold", "model"):
+        mode = "hold"
+    if concentration_limit_pct is None:
+        try:
+            concentration_limit_pct = float(os.getenv("IRA_CONCENTRATION_PCT", "10"))
+        except ValueError:
+            concentration_limit_pct = 10.0
     snap, source, warnings = load_positions(cache_path, csv_path, holdings_path=holdings_path)
     review = IRAReview(as_of=datetime.now(timezone.utc).isoformat(timespec="minutes"),
-                       source=source, band=band, warnings=warnings)
+                       source=source, band=band, warnings=warnings, mode=mode,
+                       concentration_limit_pct=concentration_limit_pct)
     if not snap:
         return review
 
@@ -220,9 +246,14 @@ def build_review(broker, *, api_key: str, api_secret: str,
     news = fetch_news_digest(api_key, api_secret, sorted(positions), hours=news_hours) \
         if with_news else {s: NewsDigest(s) for s in positions}
 
-    trades = suggest_trades(positions, cash, targets, prices, band=band, min_dollars=min_dollars)
-    review.trades = trades
-    by_sym = {t.symbol: t for t in trades}
+    # The model's plan, with the paper core's rule: never propose BUYING a
+    # name whose last close is below its trend average.
+    gated = {s: w for s, w in targets.items()
+             if not (s not in positions and stats[s].above_trend is False)}
+    model_trades = suggest_trades(positions, cash, gated, prices, band=band, min_dollars=min_dollars)
+    review.model_trades = model_trades
+    review.trades = model_trades if mode == "model" else []
+    by_sym = {t.symbol: t for t in review.trades}
 
     for s in sorted(positions, key=lambda k: -positions[k].get("value", 0.0)):
         p = positions[s]
@@ -245,9 +276,24 @@ def _fmt_pct(x: Optional[float]) -> str:
     return "   n/a" if x is None else f"{x:+6.1f}%"
 
 
+def _render_plan(trades: List[Trade], max_trades: int, L: List[str], indent: str = "    ") -> None:
+    sells = [t for t in trades if t.side == "SELL"]
+    buys = [t for t in trades if t.side == "BUY"]
+    exits = [t for t in sells if t.reason.startswith("exit")]
+    trims = [t for t in sells if not t.reason.startswith("exit")]
+    for t in trims + buys:
+        L.append(f"{indent}{t.side:4s} {t.quantity:>6d} {t.symbol:6s} ~${t.est_value:>10,.0f}  {t.reason}")
+    if exits:
+        L.append(f"{indent}EXIT {len(exits)} names not in the model, ~${sum(t.est_value for t in exits):,.0f} total:")
+        shown = exits[:max_trades]
+        L.append(f"{indent}  " + ", ".join(f"{t.symbol} {t.quantity}" for t in shown))
+        if len(exits) > max_trades:
+            L.append(f"{indent}  ... {len(exits) - max_trades} more")
+
+
 def render_text(r: IRAReview, max_rows: int = 120, max_trades: int = 40) -> str:
     L: List[str] = []
-    L.append(f"IRA REVIEW  (source: {r.source}; propose-only, nothing is placed)")
+    L.append(f"IRA REVIEW  ({r.mode.upper()} mode; source: {r.source}; propose-only, nothing is placed)")
     if r.source == "none":
         L.extend("  ! " + w for w in r.warnings)
         return "\n".join(L)
@@ -263,13 +309,14 @@ def render_text(r: IRAReview, max_rows: int = 120, max_trades: int = 40) -> str:
         L.append(f"  ! {w}")
 
     flagged = r.flagged
+    # Positions of at least 0.5% (or with negative news) get a line each; the
+    # long tail of sub-0.5% names below trend is counted, not listed.
+    major = [h for h in flagged if h.pct >= 0.5 or h.news.flag == "negative"]
+    minor = [h for h in flagged if h not in major]
     if flagged:
-        # Positions of at least 0.5% (or with negative news) get a line each;
-        # the long tail of sub-0.5% names below trend is counted, not listed.
-        major = [h for h in flagged if h.pct >= 0.5 or h.news.flag == "negative"]
-        minor = [h for h in flagged if h not in major]
         L.append("")
-        L.append(f"  Needs a look ({len(flagged)} flagged):")
+        title = ("Decide hold / trim / exit" if r.mode == "hold" else "Needs a look")
+        L.append(f"  {title} ({len(flagged)} flagged):")
         for h in major:
             why = []
             if h.stats.above_trend is False:
@@ -277,7 +324,7 @@ def render_text(r: IRAReview, max_rows: int = 120, max_trades: int = 40) -> str:
             if h.news.flag == "negative":
                 why.append(f"negative news ({h.news.mean_sentiment:+.2f}, "
                            f"{len(h.news.articles)} items)")
-            L.append(f"    {h.symbol:6s} {h.pct:5.1f}%  " + "; ".join(why))
+            L.append(f"    {h.symbol:6s} {h.pct:5.1f}%  ${h.value:>9,.0f}  " + "; ".join(why))
             for a in h.news.articles[:2]:
                 L.append(f"           - {a.headline[:95]}")
         if minor:
@@ -285,6 +332,9 @@ def render_text(r: IRAReview, max_rows: int = 120, max_trades: int = 40) -> str:
                      f"(~${sum(h.value for h in minor):,.0f} total): "
                      + ", ".join(h.symbol for h in minor[:30])
                      + (" ..." if len(minor) > 30 else ""))
+    elif r.mode == "hold":
+        L.append("")
+        L.append("  Nothing new: no position over 0.5% is below trend or in negative news.")
 
     L.append("")
     L.append("  Holdings (largest first):")
@@ -297,25 +347,37 @@ def render_text(r: IRAReview, max_rows: int = 120, max_trades: int = 40) -> str:
         L.append(f"    ... {len(r.holdings) - max_rows} more")
 
     L.append("")
-    if r.trades:
-        sells = [t for t in r.trades if t.side == "SELL"]
-        buys = [t for t in r.trades if t.side == "BUY"]
-        exits = [t for t in sells if t.reason.startswith("exit")]
-        trims = [t for t in sells if not t.reason.startswith("exit")]
-        L.append(f"  Proposed ({len(sells)} sells ~${sum(t.est_value for t in sells):,.0f}, "
-                 f"{len(buys)} buys ~${sum(t.est_value for t in buys):,.0f}):")
-        for t in trims + buys:
-            L.append(f"    {t.side:4s} {t.quantity:>6d} {t.symbol:6s} ~${t.est_value:>10,.0f}  {t.reason}")
-        if exits:
-            L.append(f"    EXIT {len(exits)} names not in the model, ~${sum(t.est_value for t in exits):,.0f} total:")
-            shown = exits[:max_trades]
-            L.append("      " + ", ".join(f"{t.symbol} {t.quantity}" for t in shown))
-            if len(exits) > max_trades:
-                L.append(f"      ... {len(exits) - max_trades} more")
-        L.append("  To act: on the Mac, `python -m trader.advisor.cli --live --band "
-                 f"{r.band}` and approve each trade.")
+    conc = r.concentrated
+    if conc:
+        L.append(f"  Concentration: {', '.join(f'{h.symbol} {h.pct:.0f}%' for h in conc)} "
+                 f"(each over {r.concentration_limit_pct:.0f}% of the account; "
+                 f"top {len(conc)} = {sum(h.pct for h in conc):.0f}%)")
+
+    if r.mode == "hold":
+        # Hold mode: what you own is the baseline, so there is no trade list;
+        # the decisions are the flagged block above.
+        mt = r.model_trades
+        if mt:
+            sells = [t for t in mt if t.side == "SELL"]
+            buys = [t for t in mt if t.side == "BUY"]
+            exits = [t for t in sells if t.reason.startswith("exit")]
+            L.append("")
+            L.append(f"  Model plan, for reference (IRA_MODE=model to make it the proposal): "
+                     f"{len(sells) - len(exits)} trims + {len(exits)} exits ~${sum(t.est_value for t in sells):,.0f}, "
+                     f"{len(buys)} buys ~${sum(t.est_value for t in buys):,.0f}"
+                     + ("; " + ", ".join(f"buy {t.symbol}" for t in buys) if buys else ""))
     else:
-        L.append("  Proposed: nothing (within bands).")
+        if r.trades:
+            sells = [t for t in r.trades if t.side == "SELL"]
+            buys = [t for t in r.trades if t.side == "BUY"]
+            L.append(f"  Proposed ({len(sells)} sells ~${sum(t.est_value for t in sells):,.0f}, "
+                     f"{len(buys)} buys ~${sum(t.est_value for t in buys):,.0f}; "
+                     f"buys below the 200dma are withheld):")
+            _render_plan(r.trades, max_trades, L)
+            L.append("  To act: on the Mac, `python -m trader.advisor.cli --live --band "
+                     f"{r.band}` and approve each trade.")
+        else:
+            L.append("  Proposed: nothing (within bands).")
     return "\n".join(L)
 
 
@@ -323,4 +385,6 @@ def render_push(r: IRAReview) -> str:
     if r.source == "none":
         return "IRA: no position source"
     n_flag = len(r.flagged)
-    return f"IRA ${r.total:,.0f} | {len(r.trades)} proposals | {n_flag} flagged | {r.source}"
+    what = (f"{len(r.trades)} proposals" if r.mode == "model"
+            else f"{sum(1 for h in r.holdings if (h.stats.above_trend is False and h.pct >= 0.5) or h.news.flag == 'negative')} to review")
+    return f"IRA ${r.total:,.0f} | {what} | {n_flag} flagged | {r.source}"

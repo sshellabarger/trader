@@ -168,11 +168,14 @@ the plan the afternoon before.
 
 ### The IRA review (optional, `IRA_REVIEW_ENABLED=true`)
 
-Read-only. Every heartbeat appends: holdings vs the model, 1d/1w/1m moves,
-200dma trend, a news digest with negatives flagged, and the trades the
-advisor WOULD make. Nothing is placed; to act, run
-`python -m trader.advisor.cli --live --band 0.25` on the Mac and approve each
-trade by hand.
+Read-only. Every heartbeat appends: holdings with 1d/1w/1m moves and 200dma
+trend, a news digest with negatives flagged, concentration over
+`IRA_CONCENTRATION_PCT`, and either (`IRA_MODE=hold`, the default) a short
+list of names worth a hold/trim/exit decision with the model's restructure
+plan as a one-line footer, or (`IRA_MODE=model`) the full trade list the
+advisor would make, with buys withheld for names below trend. Nothing is
+placed; to act, run `python -m trader.advisor.cli --live --band 0.25` on the
+Mac and approve each trade by hand.
 
 **Without the Schwab API (the simple way):** on schwab.com open the
 account's Positions page, click **Export**, and put that CSV on the droplet

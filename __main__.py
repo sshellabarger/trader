@@ -500,7 +500,8 @@ def cmd_ira_review(args):
     r = ira.build_review(AlpacaBroker(config.broker), api_key=config.broker.api_key,
                          api_secret=config.broker.api_secret, band=args.band,
                          min_dollars=args.min_dollars, csv_path=args.positions_csv,
-                         holdings_path=args.holdings, with_news=not args.no_news)
+                         holdings_path=args.holdings, with_news=not args.no_news,
+                         mode=args.mode)
     text = ira.render_text(r)
     print(text)
     if not args.no_send:
@@ -660,6 +661,8 @@ def main():
     ir_p.add_argument("--band", type=float, default=0.25, help="Relative drift band")
     ir_p.add_argument("--min-dollars", type=float, default=500.0)
     ir_p.add_argument("--positions-csv", default=None, help="Offline positions export")
+    ir_p.add_argument("--mode", choices=["hold", "model"], default=None,
+                      help="hold (default, watch what you own) or model (propose the restructure)")
     ir_p.add_argument("--holdings", default=None,
                       help="Hand-maintained 'SYMBOL SHARES' file (default data/ira_holdings.txt)")
 
